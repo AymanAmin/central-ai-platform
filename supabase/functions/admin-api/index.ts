@@ -1,6 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2.112.3'
-import { getSupabaseSecretKey, json } from '../_shared/runtime.ts'
+import { getSupabaseSecretKey, json, preflight } from '../_shared/runtime.ts'
 
 type AdminAction='bootstrap_status'|'bootstrap_super_admin'|'create_api_client'|'rotate_api_key'|'set_api_client_active'|'invite_user'|'set_tool_secret'|'create_agent_tool'
 type AppRole='SUPER_ADMIN'|'ORGANIZATION_ADMIN'|'KNOWLEDGE_MANAGER'|'SUPPORT_AGENT'|'VIEWER'
@@ -9,7 +9,7 @@ const normalizeCode=(value:string)=>value.trim().toUpperCase().replace(/[^A-Z0-9
 const generateApiKey=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));const raw=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');return `ai_live_${raw}`}
 const sha256=async(value:string)=>{const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('')}
 
-Deno.serve(async(req:Request)=>{if(req.method!=='POST')return json({success:false,error:'method_not_allowed'},405)
+Deno.serve(async(req:Request)=>{const cors=preflight(req);if(cors)return cors;if(req.method!=='POST')return json({success:false,error:'method_not_allowed'},405)
  try{const authHeader=req.headers.get('authorization');if(!authHeader?.startsWith('Bearer '))return json({success:false,error:'unauthorized'},401);const token=authHeader.slice(7);const url=Deno.env.get('SUPABASE_URL');if(!url)throw new Error('SUPABASE_URL missing');const admin=createClient(url,getSupabaseSecretKey(),{auth:{persistSession:false,autoRefreshToken:false}});const {data:authData,error:authError}=await admin.auth.getUser(token);if(authError||!authData.user)return json({success:false,error:'unauthorized'},401);const body=await req.json() as AdminBody;if(!body.action)return json({success:false,error:'missing_action'},400)
   const {count:profileCount,error:countError}=await admin.from('profiles').select('id',{count:'exact',head:true});if(countError)throw countError
   if(body.action==='bootstrap_status')return json({success:true,canBootstrap:(profileCount??0)===0})
