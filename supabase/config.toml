@@ -1,0 +1,16 @@
+project_id = "central-ai-platform"
+
+[functions.admin-api]
+verify_jwt = true
+
+[functions.chat]
+verify_jwt = false
+
+[functions.knowledge-process]
+verify_jwt = false
+
+[functions.background-worker]
+verify_jwt = false
+
+[functions.playground]
+verify_jwt = true

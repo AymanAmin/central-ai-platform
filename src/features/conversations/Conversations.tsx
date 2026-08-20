@@ -1,0 +1,8 @@
+import { useEffect,useState } from 'react'
+import { supabase } from '../../lib/supabase'
+import { Card, Empty, PageHeader } from '../../components/Ui'
+import type { Conversation } from '../../types/domain'
+interface Message{id:string;role:string;direction:string;content:string|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string}
+export function Conversations(){const [rows,setRows]=useState<Conversation[]>([]);const [selected,setSelected]=useState('');const [messages,setMessages]=useState<Message[]>([])
+ useEffect(()=>{void supabase.from('conversations').select('*').order('last_message_at',{ascending:false}).limit(100).then(r=>setRows((r.data??[]) as Conversation[]))},[]);useEffect(()=>{if(!selected){setMessages([]);return}void supabase.from('messages').select('id,role,direction,content,intent,confidence,requires_human,created_at').eq('conversation_id',selected).order('created_at').then(r=>setMessages((r.data??[]) as Message[]))},[selected])
+ return <><PageHeader title="المحادثات" description="Timeline مع حالة AI / Human وIntent/Confidence."/><div className="split"><Card>{rows.length===0?<Empty>لا توجد محادثات.</Empty>:rows.map(r=><button className={`list-row ${selected===r.id?'selected':''}`} key={r.id} onClick={()=>setSelected(r.id)}><strong>{r.external_conversation_id}</strong><span>{r.channel} · {r.status}</span><small>{new Date(r.last_message_at).toLocaleString('ar-SA')}</small></button>)}</Card><Card><h2>Timeline</h2>{messages.length===0?<Empty>اختر محادثة.</Empty>:<div className="timeline">{messages.map(m=><div key={m.id} className={`bubble ${m.role}`}><div>{m.content}</div><small>{m.intent??'—'} · confidence {m.confidence??'—'} {m.requires_human?'· human':''}</small></div>)}</div>}</Card></div></>}
