@@ -1,3 +1,5 @@
+import { createAdminClient } from './runtime.ts'
+
 export interface AiAction {
   type: 'open_url' | 'reply_option' | 'call_phone' | 'download_file' | 'human_handoff' | 'request_location' | 'open_screen' | 'custom'
   label: string | null
@@ -23,7 +25,7 @@ export interface AiToolPlanResult extends AiChatResult {
 
 export type EmbeddingTask = 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT'
 export interface EmbeddingResult { vectors: number[][]; tokens: number }
-export interface AiProviderSettings { provider: string; chat_model: string; embedding_model: string }
+export interface AiProviderSettings { id?: string; provider: string; chat_model: string; embedding_model: string }
 
 export interface AiProvider {
   readonly provider: string
@@ -243,18 +245,81 @@ export class GeminiProvider implements AiProvider {
   }
 }
 
-export function createAiProvider(settings: AiProviderSettings): AiProvider {
+function directProvider(settings: AiProviderSettings, key?: string): AiProvider {
   if (settings.provider === 'gemini') {
-    const key = Deno.env.get('GEMINI_API_KEY')
-    if (!key) throw new Error('gemini_api_key_missing')
-    return new GeminiProvider(key, settings.chat_model, settings.embedding_model)
+    const resolved = key || Deno.env.get('GEMINI_API_KEY')
+    if (!resolved) throw new Error('gemini_api_key_missing')
+    return new GeminiProvider(resolved, settings.chat_model, settings.embedding_model)
   }
   if (settings.provider === 'openai') {
-    const key = Deno.env.get('OPENAI_API_KEY')
-    if (!key) throw new Error('openai_api_key_missing')
-    return new OpenAiProvider(key, settings.chat_model, settings.embedding_model)
+    const resolved = key || Deno.env.get('OPENAI_API_KEY')
+    if (!resolved) throw new Error('openai_api_key_missing')
+    return new OpenAiProvider(resolved, settings.chat_model, settings.embedding_model)
   }
   throw new Error('ai_provider_not_configured')
 }
 
-export const isAiProviderUnavailableError = (message: string) => message === 'ai_provider_not_configured' || message === 'gemini_api_key_missing' || message === 'openai_api_key_missing'
+async function resolveVaultKey(settings: AiProviderSettings): Promise<string | null> {
+  const admin = createAdminClient()
+  let settingId = settings.id
+  if (!settingId) {
+    const setting = await admin
+      .from('ai_provider_settings')
+      .select('id')
+      .is('organization_id', null)
+      .eq('provider', settings.provider)
+      .eq('is_active', true)
+      .eq('is_default', true)
+      .maybeSingle()
+    if (setting.error) throw new Error('ai_provider_secret_lookup_failed')
+    settingId = setting.data?.id
+  }
+  if (!settingId) return null
+  const secret = await admin.rpc('get_ai_provider_secret', { p_provider_setting_id: settingId })
+  if (secret.error) throw new Error('ai_provider_secret_lookup_failed')
+  return typeof secret.data === 'string' && secret.data.trim() ? secret.data : null
+}
+
+class VaultBackedProvider implements AiProvider {
+  readonly provider: string
+  readonly chatModel: string
+  readonly embeddingModel: string
+  private resolved?: Promise<AiProvider>
+
+  constructor(private settings: AiProviderSettings) {
+    this.provider = settings.provider
+    this.chatModel = settings.chat_model
+    this.embeddingModel = settings.embedding_model
+  }
+
+  private getProvider(): Promise<AiProvider> {
+    if (!this.resolved) {
+      this.resolved = resolveVaultKey(this.settings).then(key => directProvider(this.settings, key ?? undefined))
+    }
+    return this.resolved
+  }
+
+  async embedding(texts: string[], task?: EmbeddingTask): Promise<EmbeddingResult> {
+    return (await this.getProvider()).embedding(texts, task)
+  }
+
+  async chat(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiChatResult> {
+    return (await this.getProvider()).chat(input)
+  }
+
+  async chatWithTools(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiToolPlanResult> {
+    return (await this.getProvider()).chatWithTools(input)
+  }
+
+  async text(instructions: string, input: string, maxOutputTokens = 500): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+    return (await this.getProvider()).text(instructions, input, maxOutputTokens)
+  }
+}
+
+export function createAiProvider(settings: AiProviderSettings, explicitKey?: string): AiProvider {
+  if (explicitKey) return directProvider(settings, explicitKey)
+  if (!['gemini', 'openai'].includes(settings.provider)) throw new Error('ai_provider_not_configured')
+  return new VaultBackedProvider(settings)
+}
+
+export const isAiProviderUnavailableError = (message: string) => message === 'ai_provider_not_configured' || message === 'gemini_api_key_missing' || message === 'openai_api_key_missing' || message === 'ai_provider_secret_lookup_failed'
