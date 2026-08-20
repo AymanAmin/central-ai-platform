@@ -2,9 +2,11 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 
 type AppRole='SUPER_ADMIN'|'ORGANIZATION_ADMIN'|'KNOWLEDGE_MANAGER'|'SUPPORT_AGENT'|'VIEWER'
-type Action='update_user'|'set_user_active'|'delete_user'|'update_api_client'|'delete_api_client'|'update_tool'|'set_tool_active'|'delete_tool'|'update_customer'|'delete_customer'|'set_conversation_status'
+type ConversationStatus='open'|'waiting_customer'|'waiting_human'|'human_assigned'|'closed'|'archived'
+type HandoffReason='customer_requested'|'low_confidence'|'complaint'|'payment_issue'|'sensitive_request'|'tool_failed'|'manual'|'policy'
+type Action='update_user'|'set_user_active'|'delete_user'|'update_api_client'|'delete_api_client'|'update_tool'|'set_tool_active'|'delete_tool'|'update_customer'|'delete_customer'|'set_conversation_status'|'request_handoff'|'take_conversation'|'resume_ai'|'claim_handoff'|'resolve_handoff'|'cancel_handoff'
 type ToolAuth='none'|'bearer'|'api_key'|'basic'
-interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:ToolAuth;toolSecret?:Record<string,unknown>;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:'open'|'closed'}
+interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:ToolAuth;toolSecret?:Record<string,unknown>;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:ConversationStatus;reason?:HandoffReason;notes?:string}
 const clean=(value:string|undefined,max=240)=>value?.trim().slice(0,max)??''
 const validToolSecret=(authType:ToolAuth,secret:Record<string,unknown>|undefined)=>{
   if(authType==='none')return true
@@ -13,6 +15,8 @@ const validToolSecret=(authType:ToolAuth,secret:Record<string,unknown>|undefined
   if(authType==='api_key')return typeof secret.header==='string'&&/^[A-Za-z0-9-]{1,64}$/.test(secret.header)&&typeof secret.value==='string'&&secret.value.length>0&&secret.value.length<=4096
   return typeof secret.username==='string'&&secret.username.length>0&&secret.username.length<=256&&!secret.username.includes(':')&&typeof secret.password==='string'&&secret.password.length>0&&secret.password.length<=2048
 }
+const handoffReasons:HandoffReason[]=['customer_requested','low_confidence','complaint','payment_issue','sensitive_request','tool_failed','manual','policy']
+const activeHandoffStatuses=['waiting','assigned']
 
 Deno.serve(async(req:Request)=>{
   const cors=preflight(req);if(cors)return cors
@@ -94,11 +98,58 @@ Deno.serve(async(req:Request)=>{
       await audit('Delete Customer','customer',body.id,result.data.organization_id,{externalCustomerId:result.data.external_customer_id});const deleted=await admin.from('customers').delete().eq('id',body.id);if(deleted.error)return json({success:false,error:'customer_delete_failed',detail:deleted.error.message},400);return json({success:true})
     }
 
+    if(['request_handoff','take_conversation','resume_ai'].includes(body.action)){
+      const result=await admin.from('conversations').select('id,organization_id,status,human_takeover,assigned_user_id').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'conversation_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN','SUPPORT_AGENT'])
+      if(['closed','archived'].includes(result.data.status))return json({success:false,error:'conversation_not_active'},409)
+      const now=new Date().toISOString()
+      if(body.action==='request_handoff'){
+        const reason=body.reason??'manual';if(!handoffReasons.includes(reason))return json({success:false,error:'invalid_handoff_reason'},400)
+        const active=await admin.from('handoff_requests').select('id,status').eq('conversation_id',body.id).in('status',activeHandoffStatuses).limit(1)
+        if(active.error)return json({success:false,error:'handoff_lookup_failed',detail:active.error.message},400)
+        const existing=active.data?.[0]
+        if(!existing){const created=await admin.from('handoff_requests').insert({organization_id:result.data.organization_id,conversation_id:body.id,reason,requested_by:actor.id,status:'waiting',notes:clean(body.notes,1000)||null});if(created.error)return json({success:false,error:'handoff_create_failed',detail:created.error.message},400)}
+        if(!existing||existing.status==='waiting'){const update=await admin.from('conversations').update({human_takeover:true,status:'waiting_human',assigned_user_id:null}).eq('id',body.id);if(update.error)return json({success:false,error:'conversation_handoff_failed',detail:update.error.message},400)}
+        await audit('Request Human Handoff','conversation',body.id,result.data.organization_id,{reason,reused:Boolean(existing)});return json({success:true,status:existing?.status??'waiting'})
+      }
+      if(body.action==='take_conversation'){
+        const active=await admin.from('handoff_requests').select('id,status').eq('conversation_id',body.id).in('status',activeHandoffStatuses).limit(1);if(active.error)return json({success:false,error:'handoff_lookup_failed',detail:active.error.message},400)
+        const existing=active.data?.[0]
+        if(existing){const assigned=await admin.from('handoff_requests').update({status:'assigned',assigned_user_id:actor.id,assigned_at:now}).eq('id',existing.id);if(assigned.error)return json({success:false,error:'handoff_assign_failed',detail:assigned.error.message},400)}
+        else{const created=await admin.from('handoff_requests').insert({organization_id:result.data.organization_id,conversation_id:body.id,reason:'manual',requested_by:actor.id,status:'assigned',assigned_user_id:actor.id,assigned_at:now});if(created.error)return json({success:false,error:'handoff_create_failed',detail:created.error.message},400)}
+        const update=await admin.from('conversations').update({human_takeover:true,status:'human_assigned',assigned_user_id:actor.id,closed_at:null}).eq('id',body.id);if(update.error)return json({success:false,error:'conversation_takeover_failed',detail:update.error.message},400)
+        await audit('Human Takeover','conversation',body.id,result.data.organization_id);return json({success:true,status:'human_assigned'})
+      }
+      const resolved=await admin.from('handoff_requests').update({status:'resolved',resolved_at:now}).eq('conversation_id',body.id).in('status',activeHandoffStatuses);if(resolved.error)return json({success:false,error:'handoff_resolve_failed',detail:resolved.error.message},400)
+      const update=await admin.from('conversations').update({human_takeover:false,status:'open',assigned_user_id:null,closed_at:null}).eq('id',body.id);if(update.error)return json({success:false,error:'conversation_resume_failed',detail:update.error.message},400)
+      await audit('Resume AI','conversation',body.id,result.data.organization_id);return json({success:true,status:'open'})
+    }
+
+    if(['claim_handoff','resolve_handoff','cancel_handoff'].includes(body.action)){
+      const result=await admin.from('handoff_requests').select('id,organization_id,conversation_id,status,assigned_user_id').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'handoff_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN','SUPPORT_AGENT'])
+      const now=new Date().toISOString()
+      if(body.action==='claim_handoff'){
+        if(result.data.status==='assigned'&&result.data.assigned_user_id===actor.id)return json({success:true,status:'assigned'})
+        if(result.data.status!=='waiting')return json({success:false,error:'handoff_not_waiting'},409)
+        const request=await admin.from('handoff_requests').update({status:'assigned',assigned_user_id:actor.id,assigned_at:now}).eq('id',body.id).eq('status','waiting');if(request.error)return json({success:false,error:'handoff_assign_failed',detail:request.error.message},400)
+        const conversation=await admin.from('conversations').update({human_takeover:true,status:'human_assigned',assigned_user_id:actor.id}).eq('id',result.data.conversation_id);if(conversation.error)return json({success:false,error:'conversation_takeover_failed',detail:conversation.error.message},400)
+        await audit('Claim Handoff','handoff_request',body.id,result.data.organization_id,{conversationId:result.data.conversation_id});return json({success:true,status:'assigned'})
+      }
+      if(!activeHandoffStatuses.includes(result.data.status))return json({success:false,error:'handoff_not_active'},409)
+      const nextStatus=body.action==='resolve_handoff'?'resolved':'cancelled'
+      const request=await admin.from('handoff_requests').update({status:nextStatus,resolved_at:now}).eq('id',body.id);if(request.error)return json({success:false,error:'handoff_update_failed',detail:request.error.message},400)
+      const conversation=await admin.from('conversations').update({human_takeover:false,status:'open',assigned_user_id:null,closed_at:null}).eq('id',result.data.conversation_id);if(conversation.error)return json({success:false,error:'conversation_resume_failed',detail:conversation.error.message},400)
+      await audit(body.action==='resolve_handoff'?'Resolve Handoff':'Cancel Handoff','handoff_request',body.id,result.data.organization_id,{conversationId:result.data.conversation_id});return json({success:true,status:nextStatus})
+    }
+
     if(body.action==='set_conversation_status'){
       const result=await admin.from('conversations').select('id,organization_id,status,human_takeover').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'conversation_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN','SUPPORT_AGENT'])
-      if(!body.status||!['open','closed'].includes(body.status))return json({success:false,error:'invalid_status'},400)
-      const patch=body.status==='closed'?{status:'closed',closed_at:new Date().toISOString(),human_takeover:false}:{status:'open',closed_at:null}
-      const update=await admin.from('conversations').update(patch).eq('id',body.id);if(update.error)return json({success:false,error:'conversation_status_failed',detail:update.error.message},400);await audit(body.status==='closed'?'Close Conversation':'Reopen Conversation','conversation',body.id,result.data.organization_id);return json({success:true,status:body.status})
+      if(!body.status||!['open','waiting_customer','closed','archived'].includes(body.status))return json({success:false,error:'invalid_status'},400)
+      const now=new Date().toISOString();const terminal=['closed','archived'].includes(body.status)
+      const patch={status:body.status,closed_at:terminal?now:null,human_takeover:false,assigned_user_id:null}
+      const update=await admin.from('conversations').update(patch).eq('id',body.id);if(update.error)return json({success:false,error:'conversation_status_failed',detail:update.error.message},400)
+      const resolved=await admin.from('handoff_requests').update({status:'resolved',resolved_at:now}).eq('conversation_id',body.id).in('status',activeHandoffStatuses);if(resolved.error)return json({success:false,error:'handoff_resolve_failed',detail:resolved.error.message},400)
+      const actionName=body.status==='closed'?'Close Conversation':body.status==='archived'?'Archive Conversation':body.status==='waiting_customer'?'Wait For Customer':'Reopen Conversation'
+      await audit(actionName,'conversation',body.id,result.data.organization_id);return json({success:true,status:body.status})
     }
 
     return json({success:false,error:'unsupported_action'},400)
