@@ -180,7 +180,11 @@ export class GeminiProvider implements AiProvider {
     const requestFor = (text: string) => ({
       model: modelPath,
       content: { parts: [{ text }] },
-      embedContentConfig: { taskType: task, outputDimensionality: 1536, autoTruncate: true },
+      // The REST endpoint currently honors these fields at request level.
+      // Using embedContentConfig here returns the default 3072 dimensions,
+      // which is incompatible with our vector(1536) schema.
+      taskType: task,
+      outputDimensionality: 1536,
     })
     const response = await fetch(endpoint, {
       method: 'POST',
