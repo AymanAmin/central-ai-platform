@@ -1,3 +1,5 @@
+import { resolve4, resolve6 } from 'node:dns/promises'
+
 const MAX_URL_BYTES = 2 * 1024 * 1024
 const MAX_REDIRECTS = 3
 const TOTAL_TIMEOUT_MS = 15_000
@@ -63,10 +65,7 @@ async function assertPublicHost(hostname: string) {
     return
   }
 
-  const [a4, a6] = await Promise.allSettled([
-    Deno.resolveDns(host, 'A'),
-    Deno.resolveDns(host, 'AAAA'),
-  ])
+  const [a4, a6] = await Promise.allSettled([resolve4(host), resolve6(host)])
   const addresses = [
     ...(a4.status === 'fulfilled' ? a4.value : []),
     ...(a6.status === 'fulfilled' ? a6.value : []),
