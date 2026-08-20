@@ -1,4 +1,4 @@
-import type { PropsWithChildren, ReactNode } from 'react'
+import { useEffect, type PropsWithChildren, type ReactNode } from 'react'
 import { useI18n } from '../lib/i18n'
 
 export function Card({children,className=''}:PropsWithChildren<{className?:string}>){return <section className={`card ${className}`}>{children}</section>}
@@ -10,3 +10,23 @@ export function FieldHint({children}:PropsWithChildren){return <small className=
 export function Spinner(){const {tr}=useI18n();return <div className="spinner" role="status" aria-label={tr('جارٍ التحميل','Loading')} />}
 export function ErrorNotice({message}:{message:string}){return <div className="notice error" role="alert">{message}</div>}
 export function SuccessNotice({message}:{message:string}){return <div className="notice success" role="status">{message}</div>}
+
+export function Modal({open,title,description,onClose,children,footer}:{open:boolean;title:string;description?:string;onClose:()=>void;children:ReactNode;footer?:ReactNode}){
+  const {tr}=useI18n()
+  useEffect(()=>{
+    if(!open)return
+    const previous=document.body.style.overflow
+    const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape')onClose()}
+    document.body.style.overflow='hidden'
+    document.addEventListener('keydown',onKey)
+    return()=>{document.body.style.overflow=previous;document.removeEventListener('keydown',onKey)}
+  },[open,onClose])
+  if(!open)return null
+  return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose()}}>
+    <section className="admin-modal" role="dialog" aria-modal="true" aria-label={title}>
+      <header className="admin-modal-header"><div><h2>{title}</h2>{description&&<p>{description}</p>}</div><button type="button" className="modal-close ghost" aria-label={tr('إغلاق','Close')} onClick={onClose}>×</button></header>
+      <div className="admin-modal-body">{children}</div>
+      {footer&&<footer className="admin-modal-footer">{footer}</footer>}
+    </section>
+  </div>
+}
