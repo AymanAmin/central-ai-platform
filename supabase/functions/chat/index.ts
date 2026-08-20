@@ -62,6 +62,13 @@ function scalarValue(value: unknown): string | null {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
   return null
 }
+function basicAuthorization(username: string, password: string) {
+  if (!username || username.includes(':') || username.length > 256 || !password || password.length > 2048) throw new Error('tool_basic_secret_invalid')
+  const bytes = new TextEncoder().encode(`${username}:${password}`)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return `Basic ${btoa(binary)}`
+}
 
 async function executeTool(admin: ReturnType<typeof createAdminClient>, tool: ToolRow, input: JsonObject, organizationId: string, conversationId: string, messageId: string) {
   const started = performance.now()
@@ -85,6 +92,9 @@ async function executeTool(admin: ReturnType<typeof createAdminClient>, tool: To
         const header = secret.header.trim()
         if (!/^[A-Za-z0-9-]{1,64}$/.test(header) || /^(host|connection|content-length|transfer-encoding|x-forwarded-|cf-)/i.test(header)) throw new Error('tool_api_key_header_blocked')
         headers.set(header, secret.value)
+      } else if (tool.auth_type === 'basic') {
+        if (typeof secret.username !== 'string' || typeof secret.password !== 'string') throw new Error('tool_basic_secret_invalid')
+        headers.set('authorization', basicAuthorization(secret.username, secret.password))
       } else throw new Error('tool_auth_type_unsupported')
     }
     const init: RequestInit = { method: tool.method, headers, signal: AbortSignal.timeout(Math.min(30, Math.max(1, tool.timeout_seconds)) * 1000) }

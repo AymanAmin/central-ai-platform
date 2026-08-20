@@ -1,92 +1,30 @@
 import { useEffect,useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { adminApi } from '../../lib/adminApi'
-import { Badge, Card, Empty, FieldHint, PageHeader, PanelHeader } from '../../components/Ui'
+import { resourceAdmin } from '../../lib/resourceAdmin'
+import { Badge, Card, Empty, FieldHint, Modal, PageHeader, PanelHeader } from '../../components/Ui'
 import type { AppRole,Organization,Profile } from '../../types/domain'
 import { useI18n } from '../../lib/i18n'
 
 export function Users({profile}:{profile:Profile}){
   const {tr,valueLabel}=useI18n()
-  const [users,setUsers]=useState<Profile[]>([])
-  const [orgs,setOrgs]=useState<Organization[]>([])
-  const [email,setEmail]=useState('')
-  const [fullName,setFullName]=useState('')
-  const [role,setRole]=useState<AppRole>('ORGANIZATION_ADMIN')
-  const [organizationId,setOrganizationId]=useState(profile.organization_id??'')
-  const [message,setMessage]=useState('')
-
-  const load=async()=>{
-    const [u,o]=await Promise.all([
-      supabase.from('profiles').select('*').order('created_at',{ascending:false}),
-      supabase.from('organizations').select('*').order('name_ar'),
-    ])
-    setUsers((u.data??[]) as Profile[])
-    setOrgs((o.data??[]) as Organization[])
-  }
-
+  const [users,setUsers]=useState<Profile[]>([]);const [orgs,setOrgs]=useState<Organization[]>([])
+  const [email,setEmail]=useState('');const [fullName,setFullName]=useState('');const [role,setRole]=useState<AppRole>('ORGANIZATION_ADMIN');const [organizationId,setOrganizationId]=useState(profile.organization_id??'');const [message,setMessage]=useState('')
+  const [editing,setEditing]=useState<Profile|null>(null);const [editName,setEditName]=useState('');const [editRole,setEditRole]=useState<AppRole>('VIEWER');const [editOrg,setEditOrg]=useState('')
+  const load=async()=>{const [u,o]=await Promise.all([supabase.from('profiles').select('*').order('created_at',{ascending:false}),supabase.from('organizations').select('*').order('name_ar')]);setUsers((u.data??[]) as Profile[]);setOrgs((o.data??[]) as Organization[])}
   useEffect(()=>{void load()},[])
-
-  const invite=async(e:React.FormEvent)=>{
-    e.preventDefault();setMessage('')
-    try{
-      await adminApi({action:'invite_user',email,fullName,userRole:role,organizationId:role==='SUPER_ADMIN'?null:organizationId})
-      setMessage(tr('تم إرسال الدعوة.','Invitation sent.'))
-      setEmail('')
-      setFullName('')
-      await load()
-    }catch(err){setMessage(err instanceof Error?err.message:tr('تعذر إرسال الدعوة','Unable to send invitation'))}
-  }
+  const invite=async(e:React.FormEvent)=>{e.preventDefault();setMessage('');try{await adminApi({action:'invite_user',email,fullName,userRole:role,organizationId:role==='SUPER_ADMIN'?null:organizationId});setMessage(tr('تم إرسال الدعوة إلى رابط المنصة المنشورة.','Invitation sent to the production application URL.'));setEmail('');setFullName('');await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر إرسال الدعوة','Unable to send invitation'))}}
+  const openEdit=(row:Profile)=>{setEditing(row);setEditName(row.full_name);setEditRole(row.role);setEditOrg(row.organization_id??'')}
+  const save=async(e:React.FormEvent)=>{e.preventDefault();if(!editing)return;try{await resourceAdmin({action:'update_user',id:editing.id,fullName:editName,userRole:editRole,organizationId:editRole==='SUPER_ADMIN'?null:editOrg});setMessage(tr('تم حفظ بيانات المستخدم.','User updated.'));setEditing(null);await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر تعديل المستخدم.','Unable to update user.'))}}
+  const toggle=async(row:Profile)=>{if(row.id===profile.id){setMessage(tr('لا يمكنك تعطيل حسابك الحالي.','You cannot disable your current account.'));return}if(row.is_active&&!confirm(tr('تعطيل المستخدم يمنع دخوله للمنصة. متابعة؟','Disabling this user blocks portal access. Continue?')))return;try{await resourceAdmin({action:'set_user_active',id:row.id,isActive:!row.is_active});setMessage(tr(row.is_active?'تم تعطيل المستخدم.':'تم تفعيل المستخدم.',row.is_active?'User disabled.':'User enabled.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر تغيير حالة المستخدم.','Unable to change user status.'))}}
+  const remove=async(row:Profile)=>{if(row.id===profile.id){setMessage(tr('لا يمكنك حذف حسابك الحالي.','You cannot delete your current account.'));return}if(!confirm(tr('سيتم حذف حساب تسجيل الدخول وملف المستخدم نهائيًا. متابعة؟','This permanently deletes the authentication account and user profile. Continue?')))return;try{await resourceAdmin({action:'delete_user',id:row.id});setMessage(tr('تم حذف المستخدم.','User deleted.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر حذف المستخدم.','Unable to delete user.'))}}
 
   return <div className="screen screen-users">
-    <PageHeader title={tr('المستخدمون','Users')} description={tr('ادعُ المستخدمين وحدد دور كل مستخدم ونطاق الجهة التي يمكنه الوصول إليها.','Invite users and define each user’s role and organization access scope.')}/>
-
+    <PageHeader title={tr('المستخدمون','Users')} description={tr('دعوة المستخدمين وتعديل الدور أو الجهة وتعطيل أو حذف الحساب مع حماية المدير العام الأخير والحساب الحالي.','Invite users, edit role or organization, disable or delete accounts while protecting the current account and last Super Admin.')}/>
     <div className="admin-split">
-      <Card className="form-panel">
-        <PanelHeader
-          title={tr('دعوة مستخدم جديد','Invite a new user')}
-          description={tr('أدخل بيانات الحساب ثم حدّد الصلاحية والجهة قبل إرسال الدعوة.','Enter the account details, then choose the role and organization before sending the invitation.')}
-          meta={<span className="panel-index">01</span>}
-        />
-        <form className="grid-form compact-form" onSubmit={invite}>
-          <label>{tr('الاسم الكامل','Full name')}
-            <input required placeholder={tr('اسم المستخدم كما سيظهر في النظام','User name as shown in the system')} value={fullName} onChange={e=>setFullName(e.target.value)}/>
-          </label>
-          <label>{tr('البريد الإلكتروني','Email address')}
-            <input required type="email" dir="ltr" placeholder="email@example.com" value={email} onChange={e=>setEmail(e.target.value)}/>
-            <FieldHint>{tr('تُرسل الدعوة إلى هذا البريد ويُستخدم لاحقًا لتسجيل الدخول.', 'The invitation is sent to this address and is later used to sign in.')}</FieldHint>
-          </label>
-          <label>{tr('الدور والصلاحيات','Role and permissions')}
-            <select value={role} onChange={e=>setRole(e.target.value as AppRole)}>
-              {profile.role==='SUPER_ADMIN'&&<option value="SUPER_ADMIN">{valueLabel('SUPER_ADMIN')}</option>}
-              <option value="ORGANIZATION_ADMIN">{valueLabel('ORGANIZATION_ADMIN')}</option>
-              <option value="KNOWLEDGE_MANAGER">{valueLabel('KNOWLEDGE_MANAGER')}</option>
-              <option value="SUPPORT_AGENT">{valueLabel('SUPPORT_AGENT')}</option>
-              <option value="VIEWER">{valueLabel('VIEWER')}</option>
-            </select>
-            <FieldHint>{tr('الدور يحدد ما يستطيع المستخدم عرضه أو تعديله داخل المنصة.', 'The role controls what the user can view or change in the platform.')}</FieldHint>
-          </label>
-          {role!=='SUPER_ADMIN'&&<label>{tr('الجهة المسموح بها','Allowed organization')}
-            <select required value={organizationId} onChange={e=>setOrganizationId(e.target.value)}>
-              <option value="">{tr('اختر الجهة','Select organization')}</option>
-              {orgs.map(o=><option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}
-            </select>
-            <FieldHint>{tr('لن يتمكن المستخدم من قراءة بيانات جهة أخرى بفضل سياسات عزل البيانات.', 'Data-isolation policies prevent this user from reading another organization’s data.')}</FieldHint>
-          </label>}
-          <div className="form-submit-row">
-            <button>{tr('إرسال الدعوة','Send invitation')}</button>
-          </div>
-        </form>
-        {message&&<div className="inline-feedback" role="status">{message}</div>}
-      </Card>
-
-      <Card className="table-card data-panel">
-        <PanelHeader
-          title={tr('الحسابات الحالية','Current accounts')}
-          description={tr('راجع المستخدمين وأدوارهم وحالة الوصول الحالية.','Review users, their roles, and current access status.')}
-          meta={<Badge>{tr(`${users.length} مستخدم`,`${users.length} users`)}</Badge>}
-        />
-        {users.length===0?<Empty>{tr('لا يوجد مستخدمون.','No users found.')}</Empty>:<table className="data-table"><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('البريد','Email')}</th><th>{tr('الدور','Role')}</th><th>{tr('الحالة','Status')}</th></tr></thead><tbody>{users.map(u=><tr key={u.id}><td className="cell-primary">{u.full_name}</td><td dir="ltr">{u.email}</td><td>{valueLabel(u.role)}</td><td><Badge tone={u.is_active?'good':'bad'}>{u.is_active?tr('نشط','Active'):tr('متوقف','Inactive')}</Badge></td></tr>)}</tbody></table>}
-      </Card>
+      <Card className="form-panel"><PanelHeader title={tr('دعوة مستخدم جديد','Invite a new user')} description={tr('تصل الدعوة إلى رابط المنصة المنشورة، ثم يحدد المستخدم كلمة مرور عند قبولها.','The invitation opens the deployed application, where the user sets a password when accepting it.')} meta={<span className="panel-index">01</span>}/><form className="grid-form compact-form" onSubmit={invite}><label>{tr('الاسم الكامل','Full name')}<input required value={fullName} onChange={e=>setFullName(e.target.value)}/></label><label>{tr('البريد الإلكتروني','Email address')}<input required type="email" dir="ltr" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>{tr('الدور والصلاحيات','Role and permissions')}<select value={role} onChange={e=>setRole(e.target.value as AppRole)}>{profile.role==='SUPER_ADMIN'&&<option value="SUPER_ADMIN">{valueLabel('SUPER_ADMIN')}</option>}<option value="ORGANIZATION_ADMIN">{valueLabel('ORGANIZATION_ADMIN')}</option><option value="KNOWLEDGE_MANAGER">{valueLabel('KNOWLEDGE_MANAGER')}</option><option value="SUPPORT_AGENT">{valueLabel('SUPPORT_AGENT')}</option><option value="VIEWER">{valueLabel('VIEWER')}</option></select></label>{role!=='SUPER_ADMIN'&&<label>{tr('الجهة المسموح بها','Allowed organization')}<select required value={organizationId} onChange={e=>setOrganizationId(e.target.value)}><option value="">{tr('اختر الجهة','Select organization')}</option>{orgs.map(o=><option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}</select><FieldHint>{tr('يطبق عزل RLS حتى بعد تعديل الدور أو الجهة.','RLS isolation continues to apply after role or organization changes.')}</FieldHint></label>}<div className="form-submit-row"><button>{tr('إرسال الدعوة','Send invitation')}</button></div></form>{message&&<div className="inline-feedback" role="status">{message}</div>}</Card>
+      <Card className="table-card data-panel"><PanelHeader title={tr('الحسابات الحالية','Current accounts')} description={tr('راجع المستخدمين وعدّل الوصول مباشرة من نفس الجدول.','Review users and manage access directly from the same table.')} meta={<Badge>{users.length}</Badge>}/>{users.length===0?<Empty>{tr('لا يوجد مستخدمون.','No users found.')}</Empty>:<table className="data-table"><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('البريد','Email')}</th><th>{tr('الدور','Role')}</th><th>{tr('الحالة','Status')}</th><th className="actions-cell">{tr('الإجراءات','Actions')}</th></tr></thead><tbody>{users.map(row=><tr key={row.id} className={row.is_active?'':'soft-disabled'}><td className="cell-primary">{row.full_name}</td><td dir="ltr">{row.email}</td><td>{valueLabel(row.role)}</td><td><Badge tone={row.is_active?'good':'bad'}>{row.is_active?tr('نشط','Active'):tr('متوقف','Inactive')}</Badge></td><td className="actions-cell"><div className="row-actions"><button className="small ghost" onClick={()=>openEdit(row)}>{tr('تعديل','Edit')}</button><button className={`small ${row.is_active?'warning-action':'success-action'}`} disabled={row.id===profile.id} onClick={()=>void toggle(row)}>{row.is_active?tr('تعطيل','Disable'):tr('تفعيل','Enable')}</button><button className="small danger-action" disabled={row.id===profile.id} onClick={()=>void remove(row)}>{tr('حذف','Delete')}</button></div></td></tr>)}</tbody></table>}</Card>
     </div>
+    <Modal open={Boolean(editing)} onClose={()=>setEditing(null)} title={tr('تعديل المستخدم','Edit user')}><form className="modal-grid" onSubmit={save}><label className="span-2">{tr('الاسم الكامل','Full name')}<input required value={editName} onChange={e=>setEditName(e.target.value)}/></label><label>{tr('الدور','Role')}<select value={editRole} onChange={e=>setEditRole(e.target.value as AppRole)}>{profile.role==='SUPER_ADMIN'&&<option value="SUPER_ADMIN">{valueLabel('SUPER_ADMIN')}</option>}<option value="ORGANIZATION_ADMIN">{valueLabel('ORGANIZATION_ADMIN')}</option><option value="KNOWLEDGE_MANAGER">{valueLabel('KNOWLEDGE_MANAGER')}</option><option value="SUPPORT_AGENT">{valueLabel('SUPPORT_AGENT')}</option><option value="VIEWER">{valueLabel('VIEWER')}</option></select></label>{editRole!=='SUPER_ADMIN'&&<label>{tr('الجهة','Organization')}<select required value={editOrg} onChange={e=>setEditOrg(e.target.value)}><option value="">{tr('اختر الجهة','Select organization')}</option>{orgs.map(o=><option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}</select></label>}<div className="form-actions span-2"><button>{tr('حفظ التعديلات','Save changes')}</button><button type="button" className="ghost" onClick={()=>setEditing(null)}>{tr('إلغاء','Cancel')}</button></div></form></Modal>
   </div>
 }
