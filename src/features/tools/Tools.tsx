@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { adminApi } from '../../lib/adminApi'
 import { supabase } from '../../lib/supabase'
-import { Card, Empty, FieldHint, PageHeader } from '../../components/Ui'
+import { Badge, Card, Empty, FieldHint, PageHeader, PanelHeader } from '../../components/Ui'
 import { useI18n } from '../../lib/i18n'
 import type { Organization } from '../../types/domain'
 
@@ -61,10 +61,16 @@ export function Tools() {
     } catch (error) { setMsg(error instanceof Error ? error.message : tr('تعذر إنشاء الأداة.','Unable to create tool.')) }
   }
 
-  return <>
+  return <div className="screen screen-tools">
     <PageHeader title={tr('أدوات الوكيل','Agent Tools')} description={tr('اربط المساعد بواجهات بيانات حية محددة مسبقًا. الأدوات للقراءة فقط في النسخة الحالية، والأسرار محفوظة في Supabase Vault.','Connect the assistant to predefined live-data APIs. Tools are read-only in the current MVP and secrets are stored in Supabase Vault.')} />
-    <Card>
-      <form className="grid-form" onSubmit={create}>
+
+    <Card className="form-panel tool-builder">
+      <PanelHeader
+        title={tr('تعريف أداة جديدة','Define a new tool')}
+        description={tr('حدد نقطة الاتصال والمصادقة وسياسات الأمان. لا يمكن للنموذج تغيير الرابط الذي تسجله هنا.','Define the endpoint, authentication, and safety policies. The model cannot change the URL registered here.')}
+        meta={<Badge tone="good">{tr('قراءة فقط في MVP','Read-only in MVP')}</Badge>}
+      />
+      <form className="tool-form" onSubmit={create}>
         <label>{tr('الجهة','Organization')}
           <select required value={form.organization_id} onChange={e => setForm({ ...form, organization_id: e.target.value })}>
             <option value="">{tr('اختر الجهة','Select organization')}</option>
@@ -83,7 +89,7 @@ export function Tools() {
           <select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })}><option>GET</option><option>POST</option></select>
           <FieldHint>{tr('استخدم GET للقراءة البسيطة وPOST عندما تتطلب الواجهة جسم طلب JSON.', 'Use GET for simple reads and POST when the API requires a JSON request body.')}</FieldHint>
         </label>
-        <label>{tr('رابط نقطة الاتصال','Endpoint URL')}
+        <label className="tool-endpoint-field">{tr('رابط نقطة الاتصال','Endpoint URL')}
           <input required type="url" dir="ltr" placeholder="https://api.example.com/status" value={form.endpoint_url} onChange={e => setForm({ ...form, endpoint_url: e.target.value })} />
           <FieldHint>{tr('هذا هو الرابط الوحيد الذي يُسمح للأداة باستدعائه؛ النموذج لا يرسل روابط من عنده.', 'This is the only URL the tool may call; the model cannot supply arbitrary URLs.')}</FieldHint>
         </label>
@@ -97,19 +103,30 @@ export function Tools() {
         {form.auth_type === 'api_key' && <label>{tr('اسم ترويسة المفتاح','API key header name')}
           <input required dir="ltr" placeholder="X-API-Key" value={form.header} onChange={e => setForm({ ...form, header: e.target.value })} />
         </label>}
-        {form.auth_type !== 'none' && <label>{tr('بيانات الاعتماد','Credential')}
+        {form.auth_type !== 'none' && <label className="tool-credential-field">{tr('بيانات الاعتماد','Credential')}
           <input required type="password" autoComplete="new-password" placeholder={tr('تُحفظ مشفرة في Vault','Stored encrypted in Vault')} value={form.credential} onChange={e => setForm({ ...form, credential: e.target.value })} />
           <FieldHint>{tr('لا تُخزن بيانات الاعتماد في React أو قاعدة بيانات عامة.', 'Credentials are not stored in React or a public database table.')}</FieldHint>
         </label>}
-        <label className="check-label"><input type="checkbox" checked={form.is_read_only} onChange={e => setForm({ ...form, is_read_only: e.target.checked })} /> {tr('قراءة فقط — إلزامي حاليًا','Read only — currently required')}</label>
-        <label className="check-label"><input type="checkbox" checked={form.requires_verification} onChange={e => setForm({ ...form, requires_verification: e.target.checked })} /> {tr('يتطلب عميلًا متحققًا منه','Verified customer required')}</label>
-        <label className="check-label"><input type="checkbox" checked={form.requires_human_approval} onChange={e => setForm({ ...form, requires_human_approval: e.target.checked })} /> {tr('يتطلب موافقة بشرية','Human approval required')}</label>
-        <button>{tr('إنشاء الأداة','Create tool')}</button>
+
+        <fieldset className="tool-policy-strip">
+          <legend>{tr('سياسات التنفيذ','Execution policies')}</legend>
+          <label className="check-label"><span><strong>{tr('قراءة فقط','Read only')}</strong><small>{tr('إلزامي في النسخة الحالية','Required in the current MVP')}</small></span><input type="checkbox" checked={form.is_read_only} onChange={e => setForm({ ...form, is_read_only: e.target.checked })} /></label>
+          <label className="check-label"><span><strong>{tr('تحقق العميل','Customer verification')}</strong><small>{tr('لا تعمل الأداة إلا لعميل متحقق منه','Only runs for a verified customer')}</small></span><input type="checkbox" checked={form.requires_verification} onChange={e => setForm({ ...form, requires_verification: e.target.checked })} /></label>
+          <label className="check-label"><span><strong>{tr('موافقة بشرية','Human approval')}</strong><small>{tr('تتوقف الأداة حتى اعتماد موظف','Pauses until a human approves')}</small></span><input type="checkbox" checked={form.requires_human_approval} onChange={e => setForm({ ...form, requires_human_approval: e.target.checked })} /></label>
+        </fieldset>
+
+        <div className="form-submit-row tool-submit-row"><button>{tr('إنشاء الأداة','Create tool')}</button></div>
       </form>
-      {msg && <p>{msg}</p>}
+      {msg && <div className="inline-feedback" role="status">{msg}</div>}
     </Card>
-    <Card>
-      {rows.length === 0 ? <Empty>{tr('لا توجد أدوات.','No tools found.')}</Empty> : <table><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('الطريقة','Method')}</th><th>{tr('نقطة الاتصال','Endpoint')}</th><th>{tr('المصادقة','Authentication')}</th><th>{tr('قراءة فقط','Read only')}</th><th>{tr('التحقق','Verification')}</th><th>{tr('الحالة','Status')}</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{row.name}<small> {row.code}</small></td><td>{row.method}</td><td><code>{row.endpoint_url}</code></td><td>{valueLabel(row.auth_type ?? 'none')}</td><td>{row.is_read_only ? tr('نعم','Yes') : tr('لا','No')}</td><td>{row.requires_verification ? tr('نعم','Yes') : tr('لا','No')}</td><td>{row.is_active ? tr('نشطة','Active') : tr('متوقفة','Inactive')}</td></tr>)}</tbody></table>}
+
+    <Card className="table-card data-panel">
+      <PanelHeader
+        title={tr('الأدوات المسجلة','Registered tools')}
+        description={tr('راجع نقاط الاتصال وسياسات التحقق وحالة كل أداة من مكان واحد.','Review endpoints, verification policies, and tool status in one place.')}
+        meta={<Badge>{tr(`${rows.length} أداة`,`${rows.length} tools`)}</Badge>}
+      />
+      {rows.length === 0 ? <Empty>{tr('لا توجد أدوات.','No tools found.')}</Empty> : <table className="data-table"><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('الطريقة','Method')}</th><th>{tr('نقطة الاتصال','Endpoint')}</th><th>{tr('المصادقة','Authentication')}</th><th>{tr('قراءة فقط','Read only')}</th><th>{tr('التحقق','Verification')}</th><th>{tr('الحالة','Status')}</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td className="cell-primary"><div>{row.name}</div><small>{row.code}</small></td><td><Badge>{row.method}</Badge></td><td><code>{row.endpoint_url}</code></td><td>{valueLabel(row.auth_type ?? 'none')}</td><td><Badge tone={row.is_read_only?'good':'bad'}>{row.is_read_only ? tr('نعم','Yes') : tr('لا','No')}</Badge></td><td>{row.requires_verification ? tr('مطلوب','Required') : tr('غير مطلوب','Not required')}</td><td><Badge tone={row.is_active?'good':'bad'}>{row.is_active ? tr('نشطة','Active') : tr('متوقفة','Inactive')}</Badge></td></tr>)}</tbody></table>}
     </Card>
-  </>
+  </div>
 }

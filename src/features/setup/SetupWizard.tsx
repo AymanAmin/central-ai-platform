@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, PageHeader } from '../../components/Ui'
+import { Badge, Card, PageHeader, PanelHeader } from '../../components/Ui'
 import { adminApi } from '../../lib/adminApi'
 import { useI18n } from '../../lib/i18n'
 import { supabase } from '../../lib/supabase'
@@ -102,21 +102,29 @@ export function SetupWizard({ profile, onNavigate }: { profile: Profile; onNavig
 
   const completed = coreSteps.filter(step => step.done).length
   const readyToTest = completed === coreSteps.length
+  const percent = Math.round((completed / coreSteps.length) * 100)
 
   if (profile.role !== 'SUPER_ADMIN') return <Card>{tr('معالج التهيئة متاح للمدير العام فقط.', 'The setup wizard is available to Super Admins only.')}</Card>
 
-  return <>
+  return <div className="screen screen-setup">
     <PageHeader
       title={tr('معالج تهيئة المنصة', 'Platform Setup Wizard')}
       description={tr('حالة مباشرة مبنية على البيانات الفعلية. لا يتم اعتبار أي خطوة مكتملة إلا عند تحقق متطلباتها.', 'Live readiness based on real platform data. A step is complete only when its requirement is actually satisfied.')}
-      actions={<button type="button" onClick={() => void loadBase()} disabled={loading}>{tr('تحديث الحالة', 'Refresh status')}</button>}
+      actions={<button type="button" className="ghost" onClick={() => void loadBase()} disabled={loading}>{tr('تحديث الحالة', 'Refresh status')}</button>}
     />
 
-    <Card>
-      <div className="stack">
-        <strong>{tr(`اكتمل ${completed} من ${coreSteps.length}`, `${completed} of ${coreSteps.length} complete`)}</strong>
-        <progress value={completed} max={coreSteps.length} style={{ width: '100%' }} />
-        {orgs.length > 0 && <label>{tr('الجهة التي يتم تجهيزها', 'Organization being configured')}
+    <Card className="setup-overview">
+      <div className="setup-overview-main">
+        <div className="setup-overview-copy">
+          <span className="setup-label">{tr('جاهزية الربط','Integration readiness')}</span>
+          <strong>{tr(`اكتمل ${completed} من ${coreSteps.length}`, `${completed} of ${coreSteps.length} complete`)}</strong>
+          <p>{readyToTest ? tr('المسار الأساسي جاهز للاختبار النهائي.', 'The core path is ready for the final test.') : tr('أكمل الخطوات المتبقية بالترتيب الأنسب لبيئتك.', 'Complete the remaining steps in the order that best fits your environment.')}</p>
+        </div>
+        <div className="setup-score" aria-label={tr(`${percent}% مكتمل`,`${percent}% complete`)}><strong>{percent}</strong><span>%</span></div>
+      </div>
+      <progress value={completed} max={coreSteps.length} aria-label={tr('تقدم التهيئة','Setup progress')} />
+      <div className="setup-overview-footer">
+        {orgs.length > 0 && <label className="setup-org-select">{tr('الجهة التي يتم تجهيزها', 'Organization being configured')}
           <select value={organizationId} onChange={event => setOrganizationId(event.target.value)}>
             {orgs.map(org => <option key={org.id} value={org.id}>{org.name_ar} / {org.name_en ?? org.code}</option>)}
           </select>
@@ -125,24 +133,31 @@ export function SetupWizard({ profile, onNavigate }: { profile: Profile; onNavig
       </div>
     </Card>
 
-    <div className="stats">
-      {coreSteps.map((step, index) => <Card key={step.key}>
-        <span>{tr(`الخطوة ${index + 1}`, `Step ${index + 1}`)} · {step.done ? tr('مكتملة', 'Complete') : tr('مطلوبة', 'Required')}</span>
-        <strong style={{ fontSize: '1.15rem' }}>{step.done ? '✓ ' : ''}{step.title}</strong>
+    <div className="setup-steps" aria-label={tr('خطوات التهيئة','Setup steps')}>
+      {coreSteps.map((step, index) => <Card key={step.key} className={`setup-step ${step.done ? 'is-done' : 'is-pending'}`}>
+        <div className="setup-step-top">
+          <span className="setup-step-index">{String(index + 1).padStart(2, '0')}</span>
+          <Badge tone={step.done ? 'good' : 'warn'}>{step.done ? tr('مكتملة', 'Complete') : tr('مطلوبة', 'Required')}</Badge>
+        </div>
+        <h2>{step.title}</h2>
         <p>{step.detail}</p>
         <button type="button" className={step.done ? 'small ghost' : 'small'} onClick={() => onNavigate(step.page)}>{step.done ? tr('مراجعة', 'Review') : tr('إكمال الخطوة', 'Complete step')}</button>
       </Card>)}
     </div>
 
-    <Card>
-      <h2>{tr('الاختبار النهائي', 'Final test')}</h2>
+    <Card className={`setup-final ${readyToTest ? 'is-ready' : ''}`}>
+      <PanelHeader
+        title={tr('الاختبار النهائي', 'Final test')}
+        description={tr('تأكد من مسار الذكاء الاصطناعي ثم اختبر عقدة /chat قبل اعتماد الجهة للربط الخارجي.','Validate the AI path, then test the /chat contract before marking the organization integration-ready.')}
+        meta={<Badge tone={readyToTest ? 'good' : 'warn'}>{readyToTest ? tr('جاهز','Ready') : tr('بانتظار خطوات','Pending steps')}</Badge>}
+      />
       {readyToTest ? <>
         <div className="notice success">{tr('المتطلبات الأساسية جاهزة. نفّذ سؤالًا حقيقيًا في مختبر الذكاء الاصطناعي، ثم استخدم عميل API لاختبار مسار /chat.', 'Core requirements are ready. Run a real question in AI Playground, then use the API Client to test /chat.')}</div>
-        <div className="form-actions" style={{ marginTop: 12 }}>
+        <div className="form-actions setup-final-actions">
           <button type="button" onClick={() => onNavigate('playground')}>{tr('فتح مختبر الذكاء الاصطناعي', 'Open AI Playground')}</button>
           <button type="button" className="ghost" onClick={() => onNavigate('integration')}>{tr('فتح دليل الربط', 'Open integration guide')}</button>
         </div>
       </> : <div className="notice">{tr('أكمل الخطوات المطلوبة أعلاه قبل الاختبار النهائي.', 'Complete the required steps above before the final test.')}</div>}
     </Card>
-  </>
+  </div>
 }

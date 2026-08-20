@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { supabase } from '../../lib/supabase'
-import { Card, Empty, FieldHint, PageHeader } from '../../components/Ui'
+import { Badge, Card, Empty, FieldHint, PageHeader, PanelHeader } from '../../components/Ui'
 import type { KnowledgeBase, KnowledgeDocument, Organization, Profile } from '../../types/domain'
 import { useI18n, type AppLanguage } from '../../lib/i18n'
 
@@ -166,14 +166,19 @@ export function Knowledge({ profile }: { profile: Profile }) {
   const visibleBases = organizationId ? bases.filter(b => b.organization_id === organizationId) : bases
   const visibleDocs = selectedKb ? docs.filter(d => d.knowledge_base_id === selectedKb) : docs
 
-  return <>
+  return <div className="screen screen-knowledge">
     <PageHeader
       title={tr('المعرفة', 'Knowledge')}
       description={tr('نظّم مصادر المعرفة التي يعتمد عليها المساعد: ملفات، صفحات ويب، أسئلة شائعة، ونصوص يدوية.', 'Organize the sources the assistant relies on: files, web pages, FAQs, and manual text.')}
     />
 
-    <Card>
-      <div className="grid-form">
+    <Card className="context-panel">
+      <PanelHeader
+        title={tr('سياق العمل','Working context')}
+        description={tr('حدد الجهة وقاعدة المعرفة ولغة المحتوى قبل إضافة أي مصدر.','Choose the organization, knowledge base, and content language before adding a source.')}
+        meta={<span className="panel-index">01</span>}
+      />
+      <div className="grid-form context-grid">
         {profile.role === 'SUPER_ADMIN' && <label>{tr('الجهة', 'Organization')}
           <select value={organizationId} onChange={e => { setOrganizationId(e.target.value); setSelectedKb('') }}>
             <option value="">{tr('اختر الجهة', 'Select organization')}</option>
@@ -196,12 +201,16 @@ export function Knowledge({ profile }: { profile: Profile }) {
           <FieldHint>{tr('تُسجل اللغة مع المصدر لتحسين العرض والبحث والتشخيص.', 'The language is stored with the source to improve display, retrieval, and diagnostics.')}</FieldHint>
         </label>
       </div>
-      {message && <p>{message}</p>}
+      {message && <div className="inline-feedback" role="status">{message}</div>}
     </Card>
 
-    <div className="two-col">
-      <Card>
-        <h2>{tr('إنشاء قاعدة معرفة', 'Create knowledge base')}</h2>
+    <div className="knowledge-layout">
+      <Card className="knowledge-base-panel">
+        <PanelHeader
+          title={tr('إنشاء قاعدة معرفة', 'Create knowledge base')}
+          description={tr('أنشئ حاوية واضحة لمجموعة مصادر مرتبطة بنفس الموضوع.','Create a clear container for sources that belong to the same topic.')}
+          meta={<span className="panel-index">02</span>}
+        />
         <form className="stack" onSubmit={createKb}>
           <label>{tr('اسم قاعدة المعرفة', 'Knowledge base name')}
             <input required placeholder={tr('مثال: القبول والتسجيل', 'Example: Admissions')} value={kbName} onChange={e => setKbName(e.target.value)} />
@@ -214,44 +223,58 @@ export function Knowledge({ profile }: { profile: Profile }) {
         </form>
       </Card>
 
-      <Card>
-        <h2>{tr('إضافة مصدر معرفة', 'Add knowledge source')}</h2>
-        <div className="stack">
-          <h3>{tr('رفع ملف', 'Upload file')}</h3>
-          <label>{tr('اختر ملفًا', 'Choose a file')}
-            <input type="file" accept=".pdf,.docx,.txt" disabled={!selectedKb} onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
-            <FieldHint>{tr('الأنواع المدعومة: PDF وDOCX وTXT، بحد أقصى 20MB. ملفات PDF يجب أن تحتوي على نص قابل للاستخراج.', 'Supported types: PDF, DOCX, and TXT up to 20MB. PDFs must contain extractable text.')}</FieldHint>
-          </label>
+      <Card className="source-panel">
+        <PanelHeader
+          title={tr('إضافة مصدر معرفة', 'Add knowledge source')}
+          description={tr('اختر نوع المصدر الأنسب. كل مصدر يدخل نفس مسار المعالجة والعزل الخاص بالجهة.','Choose the most suitable source type. Every source follows the same organization-isolated processing path.')}
+          meta={<span className="panel-index">03</span>}
+        />
+        <div className="source-methods">
+          <section className="source-method">
+            <div className="source-method-head"><span className="source-method-index">A</span><div><h3>{tr('رفع ملف', 'Upload file')}</h3><p>{tr('للمستندات الرسمية والملفات المرجعية.','For official documents and reference files.')}</p></div></div>
+            <label>{tr('اختر ملفًا', 'Choose a file')}
+              <input type="file" accept=".pdf,.docx,.txt" disabled={!selectedKb} onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
+              <FieldHint>{tr('الأنواع المدعومة: PDF وDOCX وTXT، بحد أقصى 20MB. ملفات PDF يجب أن تحتوي على نص قابل للاستخراج.', 'Supported types: PDF, DOCX, and TXT up to 20MB. PDFs must contain extractable text.')}</FieldHint>
+            </label>
+          </section>
 
-          <h3>{tr('صفحة ويب', 'Web page')}</h3>
-          <form className="stack" onSubmit={addUrl}>
-            <label>{tr('عنوان المصدر', 'Source title')}
-              <input placeholder={tr('اختياري — يُستخدم اسم الموقع إذا تُرك فارغًا', 'Optional — the site name is used if left empty')} value={urlTitle} onChange={e => setUrlTitle(e.target.value)} />
-            </label>
-            <label>{tr('رابط الصفحة', 'Page URL')}
-              <input required type="url" dir="ltr" inputMode="url" placeholder="https://example.com/page" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} />
-              <FieldHint>{tr('يتم جلب صفحة واحدة فقط. الروابط الداخلية والمحلية محظورة أمنيًا، والحد الأقصى للصفحة 2MB.', 'One page only. Private/internal addresses are blocked for security and the page limit is 2MB.')}</FieldHint>
-            </label>
-            <button disabled={!selectedKb}>{tr('إضافة صفحة الويب', 'Add web page')}</button>
-          </form>
+          <section className="source-method">
+            <div className="source-method-head"><span className="source-method-index">B</span><div><h3>{tr('صفحة ويب', 'Web page')}</h3><p>{tr('لصفحة عامة محددة تريد إدخال محتواها إلى المعرفة.','For one public page whose content should be added to knowledge.')}</p></div></div>
+            <form className="source-inline-form" onSubmit={addUrl}>
+              <label>{tr('عنوان المصدر', 'Source title')}
+                <input placeholder={tr('اختياري — يُستخدم اسم الموقع إذا تُرك فارغًا', 'Optional — the site name is used if left empty')} value={urlTitle} onChange={e => setUrlTitle(e.target.value)} />
+              </label>
+              <label className="source-url-field">{tr('رابط الصفحة', 'Page URL')}
+                <input required type="url" dir="ltr" inputMode="url" placeholder="https://example.com/page" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} />
+                <FieldHint>{tr('يتم جلب صفحة واحدة فقط. الروابط الداخلية والمحلية محظورة أمنيًا، والحد الأقصى للصفحة 2MB.', 'One page only. Private/internal addresses are blocked for security and the page limit is 2MB.')}</FieldHint>
+              </label>
+              <button disabled={!selectedKb}>{tr('إضافة صفحة الويب', 'Add web page')}</button>
+            </form>
+          </section>
 
-          <h3>{tr('نص يدوي', 'Manual text')}</h3>
-          <form className="stack" onSubmit={addManual}>
-            <label>{tr('عنوان النص', 'Text title')}
-              <input required placeholder={tr('مثال: سياسة استرداد الرسوم', 'Example: Refund policy')} value={manualTitle} onChange={e => setManualTitle(e.target.value)} />
-            </label>
-            <label>{tr('المحتوى', 'Content')}
-              <textarea required rows={4} value={manualText} onChange={e => setManualText(e.target.value)} placeholder={tr('ألصق النص الذي تريد إضافته إلى المعرفة.', 'Paste the text you want to add to knowledge.')} />
-            </label>
-            <button disabled={!selectedKb}>{tr('إضافة النص', 'Add text')}</button>
-          </form>
+          <section className="source-method">
+            <div className="source-method-head"><span className="source-method-index">C</span><div><h3>{tr('نص يدوي', 'Manual text')}</h3><p>{tr('للسياسات القصيرة أو المعلومات التي لا تحتاج ملفًا مستقلًا.','For short policies or information that does not need a separate file.')}</p></div></div>
+            <form className="source-inline-form" onSubmit={addManual}>
+              <label>{tr('عنوان النص', 'Text title')}
+                <input required placeholder={tr('مثال: سياسة استرداد الرسوم', 'Example: Refund policy')} value={manualTitle} onChange={e => setManualTitle(e.target.value)} />
+              </label>
+              <label className="source-text-field">{tr('المحتوى', 'Content')}
+                <textarea required rows={4} value={manualText} onChange={e => setManualText(e.target.value)} placeholder={tr('ألصق النص الذي تريد إضافته إلى المعرفة.', 'Paste the text you want to add to knowledge.')} />
+              </label>
+              <button disabled={!selectedKb}>{tr('إضافة النص', 'Add text')}</button>
+            </form>
+          </section>
         </div>
       </Card>
     </div>
 
-    <Card>
-      <h2>{tr('الأسئلة الشائعة', 'FAQ')}</h2>
-      <form className="grid-form" onSubmit={addFaq}>
+    <Card className="faq-panel">
+      <PanelHeader
+        title={tr('الأسئلة الشائعة', 'FAQ')}
+        description={tr('أضف إجابات معتمدة يمكن استخدامها مباشرة عند وجود تطابق قوي لتقليل التكلفة وزيادة الثبات.','Add approved answers that can be returned directly on a strong match to reduce cost and improve consistency.')}
+        meta={<span className="panel-index">04</span>}
+      />
+      <form className="grid-form faq-form" onSubmit={addFaq}>
         <label>{tr('السؤال', 'Question')}
           <input required placeholder={tr('مثال: ما مواعيد التسجيل؟', 'Example: When does registration open?')} value={faqQ} onChange={e => setFaqQ(e.target.value)} />
         </label>
@@ -259,13 +282,17 @@ export function Knowledge({ profile }: { profile: Profile }) {
           <input required placeholder={tr('الإجابة التي يمكن إرجاعها مباشرة للعميل', 'The answer that can be returned directly to the customer')} value={faqA} onChange={e => setFaqA(e.target.value)} />
           <FieldHint>{tr('الإجابة الواضحة والدقيقة تساعد على توفير تكلفة استدعاء النموذج عند وجود تطابق قوي.', 'A clear, precise answer can save model-call cost when there is a strong FAQ match.')}</FieldHint>
         </label>
-        <button disabled={!selectedKb}>{tr('إضافة سؤال شائع', 'Add FAQ')}</button>
+        <div className="form-submit-row"><button disabled={!selectedKb}>{tr('إضافة سؤال شائع', 'Add FAQ')}</button></div>
       </form>
     </Card>
 
-    <Card>
-      <h2>{tr('المستندات والمصادر', 'Documents and sources')}</h2>
-      {visibleDocs.length === 0 ? <Empty>{tr('لا توجد مستندات أو مصادر.', 'No documents or sources found.')}</Empty> : <table>
+    <Card className="table-card documents-panel">
+      <PanelHeader
+        title={tr('المستندات والمصادر', 'Documents and sources')}
+        description={tr('تابع حالة كل مصدر وما إذا انتهت معالجته وأصبح جاهزًا للاستخدام.','Track each source and whether processing has finished and it is ready for use.')}
+        meta={<Badge>{tr(`${visibleDocs.length} مصدر`,`${visibleDocs.length} sources`)}</Badge>}
+      />
+      {visibleDocs.length === 0 ? <Empty>{tr('لا توجد مستندات أو مصادر.', 'No documents or sources found.')}</Empty> : <table className="data-table">
         <thead><tr>
           <th>{tr('العنوان', 'Title')}</th>
           <th>{tr('النوع', 'Type')}</th>
@@ -274,16 +301,16 @@ export function Knowledge({ profile }: { profile: Profile }) {
           <th>{tr('حالة المعالجة', 'Processing status')}</th>
         </tr></thead>
         <tbody>{visibleDocs.map(d => <tr key={d.id}>
-          <td>
+          <td className="cell-primary">
             <div>{d.title}</div>
             {d.source_url && <small><a href={d.source_url} target="_blank" rel="noreferrer" dir="ltr">{d.source_url}</a></small>}
           </td>
           <td>{valueLabel(d.source_type)}</td>
           <td>{valueLabel(d.language)}</td>
-          <td>{d.is_active ? tr('نشط', 'Active') : tr('متوقف', 'Inactive')}</td>
-          <td>{valueLabel(d.processing_status)}{d.processing_error && <small className="error-text"> — {valueLabel(d.processing_error)}</small>}</td>
+          <td><Badge tone={d.is_active ? 'good' : 'bad'}>{d.is_active ? tr('نشط', 'Active') : tr('متوقف', 'Inactive')}</Badge></td>
+          <td><Badge tone={d.processing_status === 'ready' ? 'good' : d.processing_status === 'failed' ? 'bad' : 'warn'}>{valueLabel(d.processing_status)}</Badge>{d.processing_error && <small className="error-text"> — {valueLabel(d.processing_error)}</small>}</td>
         </tr>)}</tbody>
       </table>}
     </Card>
-  </>
+  </div>
 }
