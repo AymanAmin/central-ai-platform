@@ -50,7 +50,7 @@ export function Dashboard({profile}:{profile:Profile}){
     [tr('القنوات','Channels'),tr('موقع، CRM، واتساب، تطبيق','Web, CRM, WhatsApp, app')],
     ['Central AI',tr('عزل الجهات وذاكرة المحادثة','Tenant isolation + memory')],
     [tr('المعرفة والأدوات','Knowledge & tools'),tr('RAG وواجهات البيانات الحية','RAG + live data APIs')],
-    ['Gemini 2.5 Flash-Lite',tr('استجابة منظمة منخفضة التكلفة','Structured, cost-aware response')],
+    ['Gemini Flash-Lite',tr('استجابة منظمة منخفضة التكلفة','Structured, cost-aware response')],
   ] as const
 
   return <>
