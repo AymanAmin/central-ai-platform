@@ -1,77 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useEffect,useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { adminApi } from '../../lib/adminApi'
-import { Card, Empty, FieldHint, PageHeader } from '../../components/Ui'
-import type { ApiClient, Organization, Profile } from '../../types/domain'
+import { resourceAdmin } from '../../lib/resourceAdmin'
+import { Badge, Card, Empty, FieldHint, Modal, PageHeader, PanelHeader } from '../../components/Ui'
+import type { ApiClient,Organization,Profile } from '../../types/domain'
 import { useI18n } from '../../lib/i18n'
 
 export function ApiClients({profile}:{profile:Profile}){
   const {tr}=useI18n()
-  const [rows,setRows]=useState<ApiClient[]>([])
-  const [orgs,setOrgs]=useState<Organization[]>([])
-  const [organizationId,setOrganizationId]=useState(profile.organization_id??'')
-  const [name,setName]=useState('')
-  const [code,setCode]=useState('')
-  const [rateLimit,setRateLimit]=useState(60)
-  const [shownKey,setShownKey]=useState('')
-  const [error,setError]=useState('')
-
-  const load=async()=>{
-    const [c,o]=await Promise.all([
-      supabase.from('api_clients_safe').select('*').order('created_at',{ascending:false}),
-      supabase.from('organizations').select('*'),
-    ])
-    setRows((c.data??[]) as ApiClient[])
-    setOrgs((o.data??[]) as Organization[])
-  }
-
+  const [rows,setRows]=useState<ApiClient[]>([]);const [orgs,setOrgs]=useState<Organization[]>([])
+  const [organizationId,setOrganizationId]=useState(profile.organization_id??'');const [name,setName]=useState('');const [code,setCode]=useState('');const [rateLimit,setRateLimit]=useState(60);const [shownKey,setShownKey]=useState('');const [message,setMessage]=useState('')
+  const [editing,setEditing]=useState<ApiClient|null>(null);const [editName,setEditName]=useState('');const [editRate,setEditRate]=useState(60)
+  const load=async()=>{const [c,o]=await Promise.all([supabase.from('api_clients_safe').select('*').order('created_at',{ascending:false}),supabase.from('organizations').select('*').eq('is_active',true).order('name_ar')]);setRows((c.data??[]) as ApiClient[]);setOrgs((o.data??[]) as Organization[])}
   useEffect(()=>{void load()},[])
+  const create=async(e:React.FormEvent)=>{e.preventDefault();setMessage('');try{const r=await adminApi<{apiKey:string}>({action:'create_api_client',organizationId,name,code,capabilities:['chat'],rateLimitPerMinute:rateLimit});setShownKey(r.apiKey);setName('');setCode('');setMessage(tr('تم إنشاء عميل API. انسخ المفتاح الآن.','API client created. Copy the key now.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر إنشاء عميل API','Unable to create API client'))}}
+  const rotate=async(id:string)=>{if(!confirm(tr('سيتم إلغاء المفتاح السابق فورًا. متابعة؟','The previous key will be revoked immediately. Continue?')))return;try{const r=await adminApi<{apiKey:string}>({action:'rotate_api_key',apiClientId:id});setShownKey(r.apiKey);setMessage(tr('تم تدوير المفتاح. انسخ المفتاح الجديد الآن.','Key rotated. Copy the new key now.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر تدوير المفتاح.','Unable to rotate key.'))}}
+  const toggle=async(row:ApiClient)=>{if(row.is_active&&!confirm(tr('تعطيل عميل API سيوقف الطلبات القادمة بهذا المفتاح. متابعة؟','Disabling this API client will reject future requests using its key. Continue?')))return;try{await adminApi({action:'set_api_client_active',apiClientId:row.id,isActive:!row.is_active});setMessage(tr(row.is_active?'تم تعطيل عميل API.':'تم تفعيل عميل API.',row.is_active?'API client disabled.':'API client enabled.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر تغيير الحالة.','Unable to change status.'))}}
+  const openEdit=(row:ApiClient)=>{setEditing(row);setEditName(row.name);setEditRate(row.rate_limit_per_minute)}
+  const save=async(e:React.FormEvent)=>{e.preventDefault();if(!editing)return;try{await resourceAdmin({action:'update_api_client',id:editing.id,name:editName,rateLimitPerMinute:editRate});setMessage(tr('تم حفظ تعديلات عميل API.','API client changes saved.'));setEditing(null);await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر حفظ التعديلات.','Unable to save changes.'))}}
+  const remove=async(row:ApiClient)=>{if(!confirm(tr('حذف عميل API نهائيًا؟ المحادثات والسجلات السابقة ستحتفظ بتاريخها بدون المفتاح.','Permanently delete this API client? Previous conversations and logs retain history without the key.')))return;try{await resourceAdmin({action:'delete_api_client',id:row.id});setMessage(tr('تم حذف عميل API.','API client deleted.'));await load()}catch(err){setMessage(err instanceof Error?err.message:tr('تعذر حذف عميل API.','Unable to delete API client.'))}}
 
-  const create=async(e:React.FormEvent)=>{
-    e.preventDefault()
-    setError('')
-    try{
-      const r=await adminApi<{apiKey:string}>({action:'create_api_client',organizationId,name,code,capabilities:['chat'],rateLimitPerMinute:rateLimit})
-      setShownKey(r.apiKey)
-      setName('')
-      setCode('')
-      await load()
-    }catch(err){setError(err instanceof Error?err.message:tr('تعذر إنشاء عميل API','Unable to create API client'))}
-  }
-
-  const rotate=async(id:string)=>{
-    if(!confirm(tr('سيتم إلغاء المفتاح السابق فورًا. متابعة؟','The previous key will be revoked immediately. Continue?')))return
-    const r=await adminApi<{apiKey:string}>({action:'rotate_api_key',apiClientId:id})
-    setShownKey(r.apiKey)
-    await load()
-  }
-
-  return <>
-    <PageHeader title={tr('عملاء واجهة API','API Clients')} description={tr('أنشئ بيانات اتصال آمنة للأنظمة الخارجية. يظهر المفتاح مرة واحدة فقط ولا يُحفظ بصورته الأصلية.','Create secure credentials for external systems. Keys are shown once and are never stored in plaintext.')}/>
-    <Card>
-      <form className="grid-form" onSubmit={create}>
-        {profile.role==='SUPER_ADMIN'&&<label>{tr('الجهة','Organization')}
-          <select required value={organizationId} onChange={e=>setOrganizationId(e.target.value)}><option value="">{tr('اختر الجهة','Select organization')}</option>{orgs.map(o=><option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}</select>
-        </label>}
-        <label>{tr('اسم الاتصال','Client name')}
-          <input required placeholder={tr('مثال: موقع الجهة','Example: Organization website')} value={name} onChange={e=>setName(e.target.value)}/>
-          <FieldHint>{tr('اسم واضح يعرّف النظام الذي سيستخدم المفتاح.', 'A clear name identifying the system that will use this key.')}</FieldHint>
-        </label>
-        <label>{tr('الكود','Code')}
-          <input required dir="ltr" placeholder="WAHA_WEBSITE" value={code} onChange={e=>setCode(e.target.value)}/>
-          <FieldHint>{tr('معرف تقني ثابت بدون مسافات، مثل WAHA_WEBSITE.','A stable technical identifier without spaces, such as WAHA_WEBSITE.')}</FieldHint>
-        </label>
-        <label>{tr('الحد الأقصى للطلبات في الدقيقة','Requests per minute')}
-          <input required type="number" min={1} max={10000} value={rateLimit} onChange={e=>setRateLimit(Number(e.target.value))}/>
-          <FieldHint>{tr('يحمي الخدمة من الاندفاع المفاجئ أو الاستخدام غير الطبيعي. القيمة الافتراضية 60.', 'Protects the service from bursts or abnormal usage. The default is 60.')}</FieldHint>
-        </label>
-        <button>{tr('إنشاء عميل API','Create API Client')}</button>
-      </form>
-      {error&&<p className="error-text">{error}</p>}
-      {shownKey&&<div className="secret-once"><strong>{tr('انسخ المفتاح الآن — لن يظهر مرة أخرى','Copy the key now — it will not be shown again')}</strong><code>{shownKey}</code><button type="button" onClick={()=>void navigator.clipboard.writeText(shownKey)}>{tr('نسخ','Copy')}</button></div>}
-    </Card>
-    <Card>
-      {rows.length===0?<Empty>{tr('لا يوجد عملاء API.','No API clients found.')}</Empty>:<table><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('الكود','Code')}</th><th>{tr('بادئة المفتاح','Key prefix')}</th><th>{tr('حد الطلبات','Rate limit')}</th><th>{tr('الحالة','Status')}</th><th>{tr('إجراء','Action')}</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.name}</td><td>{r.code}</td><td><code>{r.api_key_prefix}</code></td><td>{tr(`${r.rate_limit_per_minute} طلب/دقيقة`,`${r.rate_limit_per_minute} req/min`)}</td><td>{r.is_active?tr('نشط','Active'):tr('متوقف','Inactive')}</td><td><button className="small" onClick={()=>void rotate(r.id)}>{tr('تدوير المفتاح','Rotate key')}</button></td></tr>)}</tbody></table>}
-    </Card>
-  </>
+  return <div className="screen screen-api-clients">
+    <PageHeader title={tr('عملاء واجهة API','API Clients')} description={tr('إدارة مفاتيح الأنظمة الخارجية: تعديل الاسم والحد، تدوير المفتاح، التعطيل أو الحذف.','Manage external-system credentials: edit name/rate limit, rotate keys, disable, or delete.')}/>
+    <Card className="form-panel"><PanelHeader title={tr('إنشاء عميل API','Create API client')} description={tr('المفتاح يظهر مرة واحدة ولا يحفظ بصورته الأصلية.','The key is shown once and is never stored in plaintext.')} meta={<span className="panel-index">01</span>}/><form className="grid-form" onSubmit={create}>{profile.role==='SUPER_ADMIN'&&<label>{tr('الجهة','Organization')}<select required value={organizationId} onChange={e=>setOrganizationId(e.target.value)}><option value="">{tr('اختر الجهة','Select organization')}</option>{orgs.map(o=><option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}</select></label>}<label>{tr('اسم الاتصال','Client name')}<input required value={name} onChange={e=>setName(e.target.value)}/></label><label>{tr('الكود','Code')}<input required dir="ltr" value={code} onChange={e=>setCode(e.target.value)} placeholder="WAHA_WEBSITE"/><FieldHint>{tr('الكود معرف تقني ثابت ولا يتم تعديله بعد الإنشاء.','The code is a stable technical identifier and is not edited after creation.')}</FieldHint></label><label>{tr('الطلبات في الدقيقة','Requests per minute')}<input required type="number" min={1} max={10000} value={rateLimit} onChange={e=>setRateLimit(Number(e.target.value))}/></label><div className="form-submit-row"><button>{tr('إنشاء عميل API','Create API Client')}</button></div></form>{shownKey&&<div className="secret-once"><strong>{tr('انسخ المفتاح الآن — لن يظهر مرة أخرى','Copy the key now — it will not be shown again')}</strong><code>{shownKey}</code><button type="button" onClick={()=>void navigator.clipboard.writeText(shownKey)}>{tr('نسخ','Copy')}</button></div>}{message&&<div className="inline-feedback" role="status">{message}</div>}</Card>
+    <Card className="table-card data-panel"><PanelHeader title={tr('العملاء المسجلون','Registered API clients')} description={tr('التعطيل أفضل من الحذف عندما تريد الاحتفاظ بالاتصال لإعادة تشغيله لاحقًا.','Disable instead of delete when you may want to re-enable the integration later.')} meta={<Badge>{rows.length}</Badge>}/>{rows.length===0?<Empty>{tr('لا يوجد عملاء API.','No API clients found.')}</Empty>:<table className="data-table"><thead><tr><th>{tr('الاسم','Name')}</th><th>{tr('الكود','Code')}</th><th>{tr('بادئة المفتاح','Key prefix')}</th><th>{tr('حد الطلبات','Rate limit')}</th><th>{tr('الحالة','Status')}</th><th className="actions-cell">{tr('الإجراءات','Actions')}</th></tr></thead><tbody>{rows.map(row=><tr key={row.id} className={row.is_active?'':'soft-disabled'}><td className="cell-primary">{row.name}</td><td><code>{row.code}</code></td><td><code>{row.api_key_prefix}</code></td><td>{tr(`${row.rate_limit_per_minute} طلب/دقيقة`,`${row.rate_limit_per_minute} req/min`)}</td><td><Badge tone={row.is_active?'good':'bad'}>{row.is_active?tr('نشط','Active'):tr('متوقف','Inactive')}</Badge></td><td className="actions-cell"><div className="row-actions"><button className="small ghost" onClick={()=>openEdit(row)}>{tr('تعديل','Edit')}</button><button className="small ghost" onClick={()=>void rotate(row.id)}>{tr('تدوير المفتاح','Rotate key')}</button><button className={`small ${row.is_active?'warning-action':'success-action'}`} onClick={()=>void toggle(row)}>{row.is_active?tr('تعطيل','Disable'):tr('تفعيل','Enable')}</button><button className="small danger-action" onClick={()=>void remove(row)}>{tr('حذف','Delete')}</button></div></td></tr>)}</tbody></table>}</Card>
+    <Modal open={Boolean(editing)} onClose={()=>setEditing(null)} title={tr('تعديل عميل API','Edit API client')}><form className="modal-grid" onSubmit={save}><label>{tr('الاسم','Name')}<input required value={editName} onChange={e=>setEditName(e.target.value)}/></label><label>{tr('الطلبات في الدقيقة','Requests per minute')}<input required type="number" min={1} max={10000} value={editRate} onChange={e=>setEditRate(Number(e.target.value))}/></label><div className="form-actions span-2"><button>{tr('حفظ التعديلات','Save changes')}</button><button type="button" className="ghost" onClick={()=>setEditing(null)}>{tr('إلغاء','Cancel')}</button></div></form></Modal>
+  </div>
 }
