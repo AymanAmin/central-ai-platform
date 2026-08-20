@@ -125,7 +125,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
     <div className="workspace">
       <div className="workspace-bar">
         <div className="workspace-title"><span className="workspace-mark" aria-hidden="true"/>Central AI Platform</div>
-        <div className="workspace-model"><span>{tr('النموذج','Model')}</span><strong>Gemini 2.5 Flash-Lite</strong></div>
+        <div className="workspace-model"><span>{tr('النموذج','Model')}</span><strong>Gemini Flash-Lite</strong></div>
       </div>
       <main className="main">{children}</main>
     </div>
