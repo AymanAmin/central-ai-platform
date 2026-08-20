@@ -12,14 +12,27 @@ export function Dashboard({profile}:{profile:Profile}){
 
   useEffect(()=>{void(async()=>{
     const orgFilter=profile.role==='SUPER_ADMIN'?null:profile.organization_id
-    const q=<T extends {eq:(a:string,b:string)=>T}>(x:T)=>orgFilter?x.eq('organization_id',orgFilter):x
+
+    const organizationsPromise=supabase.from('organizations').select('id',{count:'exact',head:true})
+    const messagesBase=supabase.from('messages').select('id',{count:'exact',head:true})
+    const conversationsBase=supabase.from('conversations').select('id',{count:'exact',head:true}).neq('status','closed')
+    const handoffsBase=supabase.from('handoff_requests').select('id',{count:'exact',head:true}).in('status',['waiting','assigned'])
+    const documentsBase=supabase.from('knowledge_documents').select('id',{count:'exact',head:true})
+    const usageBase=supabase.from('usage_logs').select('estimated_cost')
+
+    const messagesPromise=orgFilter?messagesBase.eq('organization_id',orgFilter):messagesBase
+    const conversationsPromise=orgFilter?conversationsBase.eq('organization_id',orgFilter):conversationsBase
+    const handoffsPromise=orgFilter?handoffsBase.eq('organization_id',orgFilter):handoffsBase
+    const documentsPromise=orgFilter?documentsBase.eq('organization_id',orgFilter):documentsBase
+    const usagePromise=orgFilter?usageBase.eq('organization_id',orgFilter):usageBase
+
     const [o,m,c,h,d,u]=await Promise.all([
-      supabase.from('organizations').select('id',{count:'exact',head:true}),
-      q(supabase.from('messages').select('id',{count:'exact',head:true})),
-      q(supabase.from('conversations').select('id',{count:'exact',head:true}).neq('status','closed')),
-      q(supabase.from('handoff_requests').select('id',{count:'exact',head:true}).in('status',['waiting','assigned'])),
-      q(supabase.from('knowledge_documents').select('id',{count:'exact',head:true})),
-      q(supabase.from('usage_logs').select('estimated_cost')),
+      organizationsPromise,
+      messagesPromise,
+      conversationsPromise,
+      handoffsPromise,
+      documentsPromise,
+      usagePromise,
     ])
     setStats({organizations:o.count??0,messages:m.count??0,conversations:c.count??0,handoffs:h.count??0,documents:d.count??0,cost:(u.data??[]).reduce((s,r)=>s+Number(r.estimated_cost??0),0)})
   })()},[profile])
@@ -37,7 +50,7 @@ export function Dashboard({profile}:{profile:Profile}){
     [tr('القنوات','Channels'),tr('موقع، CRM، واتساب، تطبيق','Web, CRM, WhatsApp, app')],
     ['Central AI',tr('عزل الجهات وذاكرة المحادثة','Tenant isolation + memory')],
     [tr('المعرفة والأدوات','Knowledge & tools'),tr('RAG وواجهات البيانات الحية','RAG + live data APIs')],
-    ['Gemini 2.5 Flash-Lite',tr('استجابة منظمة منخفضة التكلفة','Structured, cost-aware response')],
+    ['Gemini Flash-Lite',tr('استجابة منظمة منخفضة التكلفة','Structured, cost-aware response')],
   ] as const
 
   return <>
