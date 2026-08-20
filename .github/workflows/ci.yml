@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,8 +30,7 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Typecheck (non-blocking while legacy screens are cleaned up)
-        continue-on-error: true
+      - name: Typecheck
         run: npm run typecheck
       - name: Build Vite bundle
         run: npm run build
