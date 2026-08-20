@@ -1,5 +1,5 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { OpenAiProvider, type AiAction, type AiToolPlanResult } from '../_shared/ai.ts'
+import { createAiProvider, isAiProviderUnavailableError, type AiAction, type AiToolPlanResult } from '../_shared/ai.ts'
 import { createAdminClient, detectLanguage, isGreeting, json, normalizeText, requestsHuman, vectorLiteral } from '../_shared/runtime.ts'
 
 type JsonObject = Record<string, unknown>
@@ -219,10 +219,8 @@ Deno.serve(async (req: Request) => {
     let providerResult = await admin.from('ai_provider_settings').select('provider,chat_model,embedding_model,max_output_tokens').eq('organization_id', client.organization_id).eq('is_active', true).eq('is_default', true).maybeSingle()
     if (!providerResult.data) providerResult = await admin.from('ai_provider_settings').select('provider,chat_model,embedding_model,max_output_tokens').is('organization_id', null).eq('is_active', true).eq('is_default', true).maybeSingle()
     const providerSettings = providerResult.data as ProviderSettings | null
-    if (!providerSettings || providerSettings.provider !== 'openai') throw new Error('ai_provider_not_configured')
-    const openAiKey = Deno.env.get('OPENAI_API_KEY')
-    if (!openAiKey) throw new Error('openai_api_key_missing')
-    const ai = new OpenAiProvider(openAiKey, providerSettings.chat_model, providerSettings.embedding_model)
+    if (!providerSettings) throw new Error('ai_provider_not_configured')
+    const ai = createAiProvider(providerSettings)
 
     const toolResult = capabilities.includes('use_read_tools')
       ? await admin.from('agent_tools').select('id,organization_id,name,code,description,method,endpoint_url,auth_type,request_schema,response_schema,is_read_only,requires_verification,requires_human_approval,timeout_seconds,is_active').eq('organization_id', client.organization_id).eq('is_active', true).eq('is_read_only', true).order('name')
@@ -230,14 +228,14 @@ Deno.serve(async (req: Request) => {
     if (toolResult.error) throw toolResult.error
     const tools = (toolResult.data ?? []) as ToolRow[]
 
-    const embedded = await ai.embedding([text])
+    const embedded = await ai.embedding([text], 'RETRIEVAL_QUERY')
     const matched = await admin.rpc('match_knowledge_chunks', { p_organization_id: client.organization_id, p_query_embedding: vectorLiteral(embedded.vectors[0]!), p_match_count: settings.rag_top_k, p_min_similarity: settings.min_similarity, p_knowledge_base_id: null })
     if (matched.error) throw matched.error
     const chunks = (matched.data ?? []) as Chunk[]
     let confidence = chunks.length ? Math.max(...chunks.map(chunk => Number(chunk.similarity))) : (settings.allow_general_knowledge ? .7 : .3)
-    const embeddingPricing = await admin.from('model_pricing').select('embedding_cost_per_million').eq('provider', 'openai').eq('model', providerSettings.embedding_model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
+    const embeddingPricing = await admin.from('model_pricing').select('embedding_cost_per_million').eq('provider', providerSettings.provider).eq('model', providerSettings.embedding_model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
     const embeddingCost = embedded.tokens / 1_000_000 * Number(embeddingPricing.data?.embedding_cost_per_million ?? 0)
-    await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'embedding', provider: 'openai', model: providerSettings.embedding_model, embedding_tokens: embedded.tokens, estimated_cost: embeddingCost, latency_ms: Math.round(performance.now() - started) })
+    await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'embedding', provider: providerSettings.provider, model: providerSettings.embedding_model, embedding_tokens: embedded.tokens, estimated_cost: embeddingCost, latency_ms: Math.round(performance.now() - started) })
 
     if (!chunks.length && !tools.length && (settings.knowledge_only || !settings.allow_general_knowledge)) {
       const requires = confidence < settings.human_handoff_threshold
@@ -257,18 +255,18 @@ Deno.serve(async (req: Request) => {
       ? await ai.chatWithTools({ instructions, userInput, maxOutputTokens: Math.min(settings.max_output_tokens, providerSettings.max_output_tokens ?? settings.max_output_tokens) })
       : { ...(await ai.chat({ instructions, userInput, maxOutputTokens: Math.min(settings.max_output_tokens, providerSettings.max_output_tokens ?? settings.max_output_tokens) })), toolCode: null, toolInputJson: null }
 
-    const chatPricing = await admin.from('model_pricing').select('input_cost_per_million,output_cost_per_million').eq('provider', 'openai').eq('model', providerSettings.chat_model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
+    const chatPricing = await admin.from('model_pricing').select('input_cost_per_million,output_cost_per_million').eq('provider', providerSettings.provider).eq('model', providerSettings.chat_model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
     const priceInput = Number(chatPricing.data?.input_cost_per_million ?? 0), priceOutput = Number(chatPricing.data?.output_cost_per_million ?? 0)
     let totalInputTokens = plan.inputTokens, totalOutputTokens = plan.outputTokens
     let chatCost = plan.inputTokens / 1_000_000 * priceInput + plan.outputTokens / 1_000_000 * priceOutput
-    await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'chat', provider: 'openai', model: providerSettings.chat_model, input_tokens: plan.inputTokens, output_tokens: plan.outputTokens, estimated_cost: chatCost, latency_ms: Math.round(performance.now() - started) })
+    await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'chat', provider: providerSettings.provider, model: providerSettings.chat_model, input_tokens: plan.inputTokens, output_tokens: plan.outputTokens, estimated_cost: chatCost, latency_ms: Math.round(performance.now() - started) })
 
     let final = plan
     if (plan.toolCode) {
       const tool = tools.find(candidate => candidate.code === plan.toolCode)
-      if (!tool) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'tool_failed', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], 'openai', providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
-      if (tool.requires_human_approval) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'policy', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], 'openai', providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
-      if (tool.requires_verification && !externallyVerified) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'sensitive_request', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], 'openai', providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
+      if (!tool) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'tool_failed', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], providerSettings.provider, providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
+      if (tool.requires_human_approval) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'policy', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], providerSettings.provider, providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
+      if (tool.requires_verification && !externallyVerified) return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'sensitive_request', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], providerSettings.provider, providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
       try {
         const toolInput = parseToolInput(plan.toolInputJson)
         const output = await executeTool(admin, tool, toolInput, client.organization_id, conversation.id, inbound.id)
@@ -280,11 +278,11 @@ Deno.serve(async (req: Request) => {
         })
         const synthesisCost = synthesis.inputTokens / 1_000_000 * priceInput + synthesis.outputTokens / 1_000_000 * priceOutput
         totalInputTokens += synthesis.inputTokens; totalOutputTokens += synthesis.outputTokens; chatCost += synthesisCost
-        await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'chat_tool_synthesis', provider: 'openai', model: providerSettings.chat_model, input_tokens: synthesis.inputTokens, output_tokens: synthesis.outputTokens, estimated_cost: synthesisCost, latency_ms: Math.round(performance.now() - started) })
+        await admin.from('usage_logs').insert({ organization_id: client.organization_id, api_client_id: client.id, conversation_id: conversation.id, message_id: inbound.id, operation: 'chat_tool_synthesis', provider: providerSettings.provider, model: providerSettings.chat_model, input_tokens: synthesis.inputTokens, output_tokens: synthesis.outputTokens, estimated_cost: synthesisCost, latency_ms: Math.round(performance.now() - started) })
         final = { ...synthesis, toolCode: tool.code, toolInputJson: plan.toolInputJson }
       } catch (error) {
         console.error('tool_execution_failed', { requestId, toolCode: tool.code, error: error instanceof Error ? error.message : 'unknown' })
-        return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'tool_failed', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], 'openai', providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
+        return respond(language === 'ar' ? settings.handoff_ar : settings.handoff_en, plan.intent, confidence, true, 'tool_failed', [{ type: 'human_handoff', label: null, url: null, phone: null, screen: null, value: null }], providerSettings.provider, providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
       }
     }
 
@@ -297,11 +295,11 @@ Deno.serve(async (req: Request) => {
       const pending = await admin.from('background_jobs').select('id').eq('organization_id', client.organization_id).eq('job_type', 'update_conversation_summary').in('status', ['pending', 'running']).contains('payload', { conversationId: conversation.id }).maybeSingle()
       if (!pending.data) await admin.from('background_jobs').insert({ organization_id: client.organization_id, job_type: 'update_conversation_summary', payload: { conversationId: conversation.id }, priority: 80 })
     }
-    return respond(final.answer, final.intent, confidence, requiresHuman, handoffReason, actions, 'openai', providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
+    return respond(final.answer, final.intent, confidence, requiresHuman, handoffReason, actions, providerSettings.provider, providerSettings.chat_model, totalInputTokens, totalOutputTokens, embeddingCost + chatCost)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'internal_error'
     console.error('chat_error', { requestId, error: message })
-    const status = message === 'openai_api_key_missing' || message === 'ai_provider_not_configured' ? 503 : 500
+    const status = isAiProviderUnavailableError(message) ? 503 : 500
     return json({ success: false, error: status === 503 ? 'ai_provider_unavailable' : 'internal_error', requestId }, status)
   }
 })
