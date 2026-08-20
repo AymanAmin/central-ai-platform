@@ -1,65 +1,26 @@
-import { useEffect, useState } from 'react'
+import { useEffect,useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { Card, Empty, FieldHint, PageHeader } from '../../components/Ui'
+import { Badge, Card, Empty, FieldHint, Modal, PageHeader, PanelHeader } from '../../components/Ui'
 import { useI18n, type AppLanguage } from '../../lib/i18n'
 import type { Organization } from '../../types/domain'
 
 interface Row{id:string;organization_id:string;name:string;system_prompt:string;default_language:string;is_default:boolean;is_active:boolean}
 
 export function Prompts(){
-  const {language,tr,valueLabel}=useI18n()
-  const [rows,setRows]=useState<Row[]>([])
-  const [orgs,setOrgs]=useState<Organization[]>([])
-  const [name,setName]=useState('')
-  const [prompt,setPrompt]=useState('')
-  const [orgId,setOrgId]=useState('')
-  const [promptLanguage,setPromptLanguage]=useState<AppLanguage>(language)
-
-  const load=async()=>{
-    const [promptsResult,organizationsResult]=await Promise.all([
-      supabase.from('prompt_profiles').select('*').order('created_at',{ascending:false}),
-      supabase.from('organizations').select('*').eq('is_active',true).order('name_ar'),
-    ])
-    setRows((promptsResult.data??[]) as Row[])
-    const organizationRows=(organizationsResult.data??[]) as Organization[]
-    setOrgs(organizationRows)
-    if(!orgId&&organizationRows.length===1)setOrgId(organizationRows[0].id)
-  }
-
+  const {language,tr,valueLabel}=useI18n();const [rows,setRows]=useState<Row[]>([]);const [orgs,setOrgs]=useState<Organization[]>([]);const [name,setName]=useState('');const [prompt,setPrompt]=useState('');const [orgId,setOrgId]=useState('');const [promptLanguage,setPromptLanguage]=useState<AppLanguage>(language);const [message,setMessage]=useState('')
+  const [editing,setEditing]=useState<Row|null>(null);const [editName,setEditName]=useState('');const [editPrompt,setEditPrompt]=useState('');const [editLanguage,setEditLanguage]=useState<AppLanguage>('ar');const [editDefault,setEditDefault]=useState(false)
+  const load=async()=>{const [p,o]=await Promise.all([supabase.from('prompt_profiles').select('*').order('created_at',{ascending:false}),supabase.from('organizations').select('*').eq('is_active',true).order('name_ar')]);setRows((p.data??[]) as Row[]);const organizationRows=(o.data??[]) as Organization[];setOrgs(organizationRows);if(!orgId&&organizationRows.length===1)setOrgId(organizationRows[0].id)}
   useEffect(()=>{void load()},[])
+  const create=async(e:React.FormEvent)=>{e.preventDefault();if(rows.some(row=>row.organization_id===orgId&&row.is_default)){await supabase.from('prompt_profiles').update({is_default:false}).eq('organization_id',orgId)}const {error}=await supabase.from('prompt_profiles').insert({organization_id:orgId,name,system_prompt:prompt,default_language:promptLanguage,knowledge_only:true,allow_general_knowledge:false,is_default:true,is_active:true});setMessage(error?.message??tr('تم إنشاء التوجيه.','Prompt created.'));if(!error){setPrompt('');setName('');await load()}}
+  const openEdit=(row:Row)=>{setEditing(row);setEditName(row.name);setEditPrompt(row.system_prompt);setEditLanguage(row.default_language==='en'?'en':'ar');setEditDefault(row.is_default)}
+  const save=async(e:React.FormEvent)=>{e.preventDefault();if(!editing)return;if(editDefault)await supabase.from('prompt_profiles').update({is_default:false}).eq('organization_id',editing.organization_id).neq('id',editing.id);const {error}=await supabase.from('prompt_profiles').update({name:editName.trim(),system_prompt:editPrompt.trim(),default_language:editLanguage,is_default:editDefault}).eq('id',editing.id);setMessage(error?.message??tr('تم حفظ التوجيه.','Prompt saved.'));if(!error){setEditing(null);await load()}}
+  const toggle=async(row:Row)=>{if(row.is_active&&!confirm(tr('تعطيل هذا التوجيه يمنع استخدامه في الاستجابات الجديدة. متابعة؟','Disabling this prompt prevents it from being used for new responses. Continue?')))return;const {error}=await supabase.from('prompt_profiles').update({is_active:!row.is_active,is_default:row.is_active?false:row.is_default}).eq('id',row.id);setMessage(error?.message??tr(row.is_active?'تم تعطيل التوجيه.':'تم تفعيل التوجيه.',row.is_active?'Prompt disabled.':'Prompt enabled.'));if(!error)await load()}
+  const remove=async(row:Row)=>{if(!confirm(tr('حذف هذا التوجيه نهائيًا؟','Permanently delete this prompt?')))return;const {error}=await supabase.from('prompt_profiles').delete().eq('id',row.id);setMessage(error?.message??tr('تم حذف التوجيه.','Prompt deleted.'));if(!error)await load()}
 
-  const create=async(e:React.FormEvent)=>{
-    e.preventDefault()
-    const {error}=await supabase.from('prompt_profiles').insert({organization_id:orgId,name,system_prompt:prompt,default_language:promptLanguage,knowledge_only:true,allow_general_knowledge:false,is_default:true,is_active:true})
-    if(!error){setPrompt('');setName('');await load()}
-  }
-
-  return <>
-    <PageHeader title={tr('التوجيهات','Prompts')} description={tr('حدّد شخصية المساعد وقواعد الإجابة لكل جهة بدون تغيير كود التطبيق.','Define assistant behavior and answer rules for each organization without changing application code.')}/>
-    <Card>
-      <form className="stack" onSubmit={create}>
-        <label>{tr('الجهة','Organization')}
-          <select required value={orgId} onChange={e=>setOrgId(e.target.value)}>
-            <option value="">{tr('اختر الجهة','Select organization')}</option>
-            {orgs.map(org=><option key={org.id} value={org.id}>{org.name_ar} / {org.name_en??org.code}</option>)}
-          </select>
-          <FieldHint>{tr('يُطبّق التوجيه على الجهة المحددة فقط.', 'The prompt applies only to the selected organization.')}</FieldHint>
-        </label>
-        <label>{tr('اسم التوجيه','Prompt name')}
-          <input required placeholder={tr('مثال: المساعد الافتراضي','Example: Default assistant')} value={name} onChange={e=>setName(e.target.value)}/>
-        </label>
-        <label>{tr('لغة التوجيه الافتراضية','Default prompt language')}
-          <select value={promptLanguage} onChange={e=>setPromptLanguage(e.target.value as AppLanguage)}><option value="ar">{tr('العربية','Arabic')}</option><option value="en">{tr('الإنجليزية','English')}</option></select>
-        </label>
-        <label>{tr('تعليمات النظام','System instructions')}
-          <textarea required rows={7} placeholder={tr('اكتب قواعد المساعد بوضوح: ما الذي يجيب عنه، ومتى يرفض التخمين، ومتى يحول لموظف.','Write clear assistant rules: what it answers, when it avoids guessing, and when it hands off to a person.')} value={prompt} onChange={e=>setPrompt(e.target.value)}/>
-          <FieldHint>{tr('لا تضع مفاتيح API أو كلمات مرور أو أسرارًا داخل التوجيه.', 'Do not put API keys, passwords, or secrets inside the prompt.')}</FieldHint>
-        </label>
-        <button>{tr('إضافة التوجيه','Add prompt')}</button>
-      </form>
-    </Card>
-    <Card>
-      {rows.length===0?<Empty>{tr('لا توجد توجيهات.','No prompts found.')}</Empty>:rows.map(r=><div className="prompt-row" key={r.id}><strong>{r.name}</strong><small>{r.is_default?`${tr('افتراضي','Default')} · `:''}{valueLabel(r.default_language)}</small><pre>{r.system_prompt}</pre></div>)}
-    </Card>
-  </>
+  return <div className="screen screen-prompts">
+    <PageHeader title={tr('التوجيهات','Prompts')} description={tr('أنشئ وعدّل وفعّل أو عطّل التوجيهات التي تضبط سلوك المساعد لكل جهة.','Create, edit, enable, or disable prompts that control assistant behavior for each organization.')}/>
+    <Card className="form-panel"><PanelHeader title={tr('إضافة توجيه','Add prompt')} description={tr('يصبح التوجيه الجديد افتراضيًا للجهة المحددة.','The new prompt becomes the default for the selected organization.')} meta={<span className="panel-index">01</span>}/><form className="stack" onSubmit={create}><label>{tr('الجهة','Organization')}<select required value={orgId} onChange={e=>setOrgId(e.target.value)}><option value="">{tr('اختر الجهة','Select organization')}</option>{orgs.map(org=><option key={org.id} value={org.id}>{org.name_ar} / {org.name_en??org.code}</option>)}</select></label><label>{tr('اسم التوجيه','Prompt name')}<input required value={name} onChange={e=>setName(e.target.value)}/></label><label>{tr('اللغة الافتراضية','Default language')}<select value={promptLanguage} onChange={e=>setPromptLanguage(e.target.value as AppLanguage)}><option value="ar">{tr('العربية','Arabic')}</option><option value="en">{tr('الإنجليزية','English')}</option></select></label><label>{tr('تعليمات النظام','System instructions')}<textarea required rows={7} value={prompt} onChange={e=>setPrompt(e.target.value)}/><FieldHint>{tr('لا تضع مفاتيح API أو كلمات مرور أو أسرارًا داخل التوجيه.','Do not put API keys, passwords, or secrets inside the prompt.')}</FieldHint></label><button>{tr('إضافة التوجيه','Add prompt')}</button></form>{message&&<div className="inline-feedback" role="status">{message}</div>}</Card>
+    <Card className="data-panel"><PanelHeader title={tr('التوجيهات المسجلة','Registered prompts')} description={tr('التوجيهات المعطلة تبقى محفوظة ويمكن إعادة تفعيلها لاحقًا.','Disabled prompts remain stored and can be re-enabled later.')} meta={<Badge>{rows.length}</Badge>}/>{rows.length===0?<Empty>{tr('لا توجد توجيهات.','No prompts found.')}</Empty>:<div className="entity-list">{rows.map(row=><div key={row.id} className={`entity-card ${row.is_active?'':'soft-disabled'}`}><div className="entity-card-main"><strong>{row.name} {row.is_default&&<Badge tone="good">{tr('افتراضي','Default')}</Badge>}</strong><small>{valueLabel(row.default_language)}</small><small>{row.system_prompt.slice(0,220)}{row.system_prompt.length>220?'…':''}</small></div><div className="row-actions"><button className="small ghost" onClick={()=>openEdit(row)}>{tr('تعديل','Edit')}</button><button className={`small ${row.is_active?'warning-action':'success-action'}`} onClick={()=>void toggle(row)}>{row.is_active?tr('تعطيل','Disable'):tr('تفعيل','Enable')}</button><button className="small danger-action" onClick={()=>void remove(row)}>{tr('حذف','Delete')}</button></div></div>)}</div>}</Card>
+    <Modal open={Boolean(editing)} onClose={()=>setEditing(null)} title={tr('تعديل التوجيه','Edit prompt')}><form className="modal-stack" onSubmit={save}><label>{tr('الاسم','Name')}<input required value={editName} onChange={e=>setEditName(e.target.value)}/></label><label>{tr('اللغة','Language')}<select value={editLanguage} onChange={e=>setEditLanguage(e.target.value as AppLanguage)}><option value="ar">{tr('العربية','Arabic')}</option><option value="en">{tr('الإنجليزية','English')}</option></select></label><label>{tr('تعليمات النظام','System instructions')}<textarea required rows={9} value={editPrompt} onChange={e=>setEditPrompt(e.target.value)}/></label><label className="check-label"><span>{tr('اجعله التوجيه الافتراضي لهذه الجهة','Make this the default prompt for this organization')}</span><input type="checkbox" checked={editDefault} onChange={e=>setEditDefault(e.target.checked)}/></label><div className="form-actions"><button>{tr('حفظ التعديلات','Save changes')}</button><button type="button" className="ghost" onClick={()=>setEditing(null)}>{tr('إلغاء','Cancel')}</button></div></form></Modal>
+  </div>
 }
