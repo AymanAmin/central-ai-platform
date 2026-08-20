@@ -42,12 +42,13 @@ interface OpenAiResponseItem { type?: string; content?: OpenAiResponseContent[] 
 interface OpenAiResponse { output_text?: string; output?: OpenAiResponseItem[]; usage?: { input_tokens?: number; output_tokens?: number } }
 interface OpenAiEmbeddingResponse { data?: Array<{ embedding?: number[]; index?: number }>; usage?: { prompt_tokens?: number; total_tokens?: number } }
 
-interface GeminiTextContent { type?: string; text?: string }
-interface GeminiStep { type?: string; content?: GeminiTextContent[] }
-interface GeminiInteraction {
-  status?: string
-  steps?: GeminiStep[]
-  usage?: { total_input_tokens?: number; total_output_tokens?: number }
+interface GeminiGenerateContentResponse {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> }
+    finishReason?: string
+  }>
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+  promptFeedback?: { blockReason?: string }
 }
 interface GeminiEmbeddingResponse {
   embedding?: { values?: number[] }
@@ -86,14 +87,13 @@ const extractOpenAi = (payload: OpenAiResponse) => {
   throw new Error('openai_output_missing')
 }
 
-const extractGemini = (payload: GeminiInteraction) => {
-  if (payload.status && !['completed', 'incomplete'].includes(payload.status)) throw new Error(`gemini_interaction_status:${payload.status}`)
-  for (const step of payload.steps ?? []) {
-    if (step.type !== 'model_output') continue
-    for (const content of step.content ?? []) {
-      if (content.type === 'text' && content.text) return content.text
+const extractGemini = (payload: GeminiGenerateContentResponse) => {
+  for (const candidate of payload.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      if (part.text) return part.text
     }
   }
+  if (payload.promptFeedback?.blockReason) throw new Error(`gemini_blocked:${payload.promptFeedback.blockReason}`)
   throw new Error('gemini_output_missing')
 }
 
@@ -198,27 +198,30 @@ export class GeminiProvider implements AiProvider {
   }
 
   private async interaction<T>(schema: Record<string, unknown> | null, instructions: string, input: string, maxOutputTokens: number): Promise<{ value: T; inputTokens: number; outputTokens: number }> {
-    const body: Record<string, unknown> = {
-      model: this.chatModel,
-      input,
-      system_instruction: instructions,
-      store: false,
-      generation_config: { max_output_tokens: maxOutputTokens },
+    const modelPath = `models/${this.chatModel.replace(/^models\//, '')}`
+    const generationConfig: Record<string, unknown> = { maxOutputTokens }
+    if (schema) {
+      generationConfig.responseMimeType = 'application/json'
+      generationConfig.responseJsonSchema = schema
     }
-    if (schema) body.response_format = { type: 'text', mime_type: 'application/json', schema }
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    const body = {
+      contents: [{ role: 'user', parts: [{ text: input }] }],
+      systemInstruction: { parts: [{ text: instructions }] },
+      generationConfig,
+    }
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': this.key, 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(60_000),
     })
     if (!response.ok) throw new Error(`chat_provider_error:${response.status}`)
-    const payload = await response.json() as GeminiInteraction
+    const payload = await response.json() as GeminiGenerateContentResponse
     const text = extractGemini(payload).trim()
     return {
       value: (schema ? JSON.parse(text) : text) as T,
-      inputTokens: payload.usage?.total_input_tokens ?? 0,
-      outputTokens: payload.usage?.total_output_tokens ?? 0,
+      inputTokens: payload.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: payload.usageMetadata?.candidatesTokenCount ?? 0,
     }
   }
 
