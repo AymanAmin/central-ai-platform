@@ -84,6 +84,11 @@ async function providerFor(admin: SupabaseClient, orgId: string) {
   return global.data as ProviderSettings | null
 }
 
+async function updateDocument(admin: SupabaseClient, documentId: string, values: Record<string, unknown>) {
+  const updated = await admin.from('knowledge_documents').update(values).eq('id', documentId)
+  if (updated.error) throw updated.error
+}
+
 export async function processDocument(admin: SupabaseClient, documentId: string) {
   const started = performance.now()
   const { data: doc, error } = await admin
@@ -93,9 +98,10 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
     .single()
   if (error || !doc) throw error ?? new Error('document_not_found')
   const d = doc as DocumentRow
-  await admin.from('knowledge_documents').update({ processing_status: 'processing', processing_error: null }).eq('id', d.id)
 
   try {
+    await updateDocument(admin, d.id, { processing_status: 'processing', processing_error: null })
+
     let bytes: Uint8Array
     let text: string
 
@@ -114,8 +120,7 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
         contentType: fetched.contentType,
         pageTitle: fetched.pageTitle,
       }
-      const updated = await admin.from('knowledge_documents').update({ metadata }).eq('id', d.id)
-      if (updated.error) throw updated.error
+      await updateDocument(admin, d.id, { metadata })
     } else {
       if (!d.storage_path) throw new Error('storage_path_missing')
       const downloaded = await admin.storage.from('knowledge').download(d.storage_path)
@@ -132,14 +137,19 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
     const checksum = await hashBytes(bytes)
     if (d.checksum === checksum) {
       const current = await admin.from('knowledge_chunks').select('id', { count: 'exact', head: true }).eq('document_id', d.id)
+      if (current.error) throw current.error
       if ((current.count ?? 0) > 0) {
-        await admin.from('knowledge_documents').update({ processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null }).eq('id', d.id)
+        await updateDocument(admin, d.id, { processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
         return { documentId: d.id, chunks: current.count, deduplicated: true, sameDocument: true, latencyMs: Math.round(performance.now() - started) }
       }
     }
 
-    const existing = await admin.from('knowledge_documents').select('id').eq('organization_id', d.organization_id).eq('checksum', checksum).eq('processing_status', 'ready').neq('id', d.id).limit(1).maybeSingle()
-    await admin.from('knowledge_chunks').delete().eq('document_id', d.id)
+    const existing = await admin.from('knowledge_documents').select('id').eq('organization_id', d.organization_id).eq('knowledge_base_id', d.knowledge_base_id).eq('checksum', checksum).eq('processing_status', 'ready').neq('id', d.id).limit(1).maybeSingle()
+    if (existing.error) throw existing.error
+
+    const removed = await admin.from('knowledge_chunks').delete().eq('document_id', d.id)
+    if (removed.error) throw removed.error
+
     if (existing.data) {
       const source = await admin.from('knowledge_chunks').select('chunk_index,content,token_count,page_number,section_title,embedding,embedding_model,metadata').eq('document_id', existing.data.id).order('chunk_index')
       if (source.error) throw source.error
@@ -148,7 +158,7 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
         const inserted = await admin.from('knowledge_chunks').insert(copies)
         if (inserted.error) throw inserted.error
       }
-      await admin.from('knowledge_documents').update({ checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null }).eq('id', d.id)
+      await updateDocument(admin, d.id, { checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
       return { documentId: d.id, chunks: copies.length, deduplicated: true, latencyMs: Math.round(performance.now() - started) }
     }
 
@@ -172,14 +182,20 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
 
     const inserted = await admin.from('knowledge_chunks').insert(rows)
     if (inserted.error) throw inserted.error
+
     const pricing = await admin.from('model_pricing').select('embedding_cost_per_million').eq('provider', settings.provider).eq('model', settings.embedding_model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
+    if (pricing.error) throw pricing.error
     const cost = embeddingTokens / 1_000_000 * Number(pricing.data?.embedding_cost_per_million ?? 0)
-    await admin.from('usage_logs').insert({ organization_id: d.organization_id, operation: 'document_embedding', provider: settings.provider, model: settings.embedding_model, embedding_tokens: embeddingTokens, estimated_cost: cost, latency_ms: Math.round(performance.now() - started) })
-    await admin.from('knowledge_documents').update({ checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null }).eq('id', d.id)
+
+    const usage = await admin.from('usage_logs').insert({ organization_id: d.organization_id, operation: 'document_embedding', provider: settings.provider, model: settings.embedding_model, embedding_tokens: embeddingTokens, estimated_cost: cost, latency_ms: Math.round(performance.now() - started) })
+    if (usage.error) throw usage.error
+
+    await updateDocument(admin, d.id, { checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
     return { documentId: d.id, chunks: rows.length, deduplicated: false, embeddingTokens, estimatedCost: cost, latencyMs: Math.round(performance.now() - started) }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'processing_failed'
-    await admin.from('knowledge_documents').update({ processing_status: 'failed', processing_error: message }).eq('id', d.id)
+    const failed = await admin.from('knowledge_documents').update({ processing_status: 'failed', processing_error: message }).eq('id', d.id)
+    if (failed.error) console.error('knowledge_status_update_failed', { documentId: d.id, error: failed.error.message, originalError: message })
     throw err
   }
 }
