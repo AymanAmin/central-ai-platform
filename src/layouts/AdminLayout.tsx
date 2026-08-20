@@ -4,13 +4,54 @@ import { signOut } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
 import { LanguageSwitcher } from '../components/LanguageSwitcher'
 
+type NavItem = { key: string; label: string }
+type NavGroup = { label: string; items: NavItem[] }
+
 export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;page:string;onNavigate:(p:string)=>void;children:React.ReactNode}){
   const { tr, valueLabel, dir } = useI18n()
   const [menuOpen,setMenuOpen]=useState(false)
-  const items=[
-    ['dashboard',tr('لوحة التحكم','Dashboard')],
-    ...(profile.role==='SUPER_ADMIN'?[["setup",tr('معالج التهيئة','Setup Wizard')]]:[]),
-    ['organizations',tr('الجهات','Organizations')],['users',tr('المستخدمون','Users')],['api-clients','API Clients'],['integration',tr('دليل الربط','Integration Guide')],['knowledge',tr('المعرفة','Knowledge')],['playground','AI Playground'],['ai-settings',tr('إعدادات الذكاء الاصطناعي','AI Settings')],['prompts',tr('التوجيهات','Prompts')],['tools',tr('أدوات الوكيل','Agent Tools')],['customers',tr('العملاء','Customers')],['conversations',tr('المحادثات','Conversations')],['handoff',tr('التحويل البشري','Human Handoff')],['usage',tr('الاستخدام والتكلفة','Usage & Cost')],['audit',tr('سجل التدقيق','Audit Log')]
+  const groups:NavGroup[]=[
+    {
+      label:tr('مساحة العمل','Workspace'),
+      items:[
+        {key:'dashboard',label:tr('لوحة التحكم','Dashboard')},
+        ...(profile.role==='SUPER_ADMIN'?[{key:'setup',label:tr('معالج التهيئة','Setup Wizard')}]:[]),
+      ],
+    },
+    {
+      label:tr('الإدارة والربط','Administration & API'),
+      items:[
+        {key:'organizations',label:tr('الجهات','Organizations')},
+        {key:'users',label:tr('المستخدمون','Users')},
+        {key:'api-clients',label:'API Clients'},
+        {key:'integration',label:tr('دليل الربط','Integration Guide')},
+      ],
+    },
+    {
+      label:tr('المعرفة والذكاء','Knowledge & AI'),
+      items:[
+        {key:'knowledge',label:tr('المعرفة','Knowledge')},
+        {key:'playground',label:'AI Playground'},
+        {key:'ai-settings',label:tr('إعدادات الذكاء الاصطناعي','AI Settings')},
+        {key:'prompts',label:tr('التوجيهات','Prompts')},
+        {key:'tools',label:tr('أدوات الوكيل','Agent Tools')},
+      ],
+    },
+    {
+      label:tr('خدمة العملاء','Customer Service'),
+      items:[
+        {key:'customers',label:tr('العملاء','Customers')},
+        {key:'conversations',label:tr('المحادثات','Conversations')},
+        {key:'handoff',label:tr('التحويل البشري','Human Handoff')},
+      ],
+    },
+    {
+      label:tr('المراقبة','Observability'),
+      items:[
+        {key:'usage',label:tr('الاستخدام والتكلفة','Usage & Cost')},
+        {key:'audit',label:tr('سجل التدقيق','Audit Log')},
+      ],
+    },
   ]
 
   useEffect(()=>{
@@ -39,7 +80,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       aria-expanded={menuOpen}
       onClick={()=>setMenuOpen(true)}
     >
-      <span aria-hidden="true">☰</span>
+      <span className="menu-glyph" aria-hidden="true"><i/><i/><i/></span>
       <span>{tr('القائمة','Menu')}</span>
     </button>
 
@@ -53,14 +94,36 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
 
     <aside id="app-sidebar" className={`sidebar${menuOpen?' open':''}`} aria-label={tr('القائمة الرئيسية','Main navigation')}>
       <div className="sidebar-header">
-        <div className="brand"><strong>Central AI</strong><span>Platform</span></div>
+        <div className="brand" aria-label="Central AI Platform">
+          <span className="brand-signal" aria-hidden="true"><i/><i/><i/></span>
+          <span className="brand-copy"><strong>Central AI</strong><small>Control Plane</small></span>
+        </div>
         <button className="sidebar-close" type="button" aria-label={tr('إغلاق القائمة','Close menu')} onClick={()=>setMenuOpen(false)}>×</button>
       </div>
-      <LanguageSwitcher compact/>
-      <nav>{items.map(([key,label])=><button key={key} className={page===key?'active':''} aria-current={page===key?'page':undefined} onClick={()=>navigate(key)}>{label}</button>)}</nav>
-      <div className="sidebar-footer"><div>{profile.full_name}</div><small>{valueLabel(profile.role)}</small><button className="ghost" onClick={()=>void signOut()}>{tr('تسجيل الخروج','Sign out')}</button></div>
+
+      <div className="scope-chip">
+        <span className="scope-pulse" aria-hidden="true"/>
+        <span>{profile.role==='SUPER_ADMIN'?tr('نطاق جميع الجهات','All organizations'):tr('نطاق الجهة','Organization scope')}</span>
+      </div>
+
+      <nav>{groups.map(group=><div className="nav-group" key={group.label}>
+        <div className="nav-label">{group.label}</div>
+        <div className="nav-items">{group.items.map(item=><button key={item.key} className={page===item.key?'active':''} aria-current={page===item.key?'page':undefined} onClick={()=>navigate(item.key)}><span>{item.label}</span><span className="nav-indicator" aria-hidden="true"/></button>)}</div>
+      </div>)}</nav>
+
+      <div className="sidebar-footer">
+        <LanguageSwitcher compact/>
+        <div className="profile-block"><span className="profile-avatar" aria-hidden="true">{profile.full_name.trim().charAt(0).toUpperCase()||'A'}</span><div><strong>{profile.full_name}</strong><small>{valueLabel(profile.role)}</small></div></div>
+        <button className="ghost" onClick={()=>void signOut()}>{tr('تسجيل الخروج','Sign out')}</button>
+      </div>
     </aside>
 
-    <main className="main">{children}</main>
+    <div className="workspace">
+      <div className="workspace-bar">
+        <div className="workspace-title"><span className="workspace-mark" aria-hidden="true"/>Central AI Platform</div>
+        <div className="workspace-model"><span>{tr('النموذج','Model')}</span><strong>Gemini 2.5 Flash-Lite</strong></div>
+      </div>
+      <main className="main">{children}</main>
+    </div>
   </div>
 }
