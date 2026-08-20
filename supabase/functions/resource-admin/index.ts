@@ -3,8 +3,16 @@ import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 
 type AppRole='SUPER_ADMIN'|'ORGANIZATION_ADMIN'|'KNOWLEDGE_MANAGER'|'SUPPORT_AGENT'|'VIEWER'
 type Action='update_user'|'set_user_active'|'delete_user'|'update_api_client'|'delete_api_client'|'update_tool'|'set_tool_active'|'delete_tool'|'update_customer'|'delete_customer'|'set_conversation_status'
-interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:string;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:'open'|'closed'}
+type ToolAuth='none'|'bearer'|'api_key'|'basic'
+interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:ToolAuth;toolSecret?:Record<string,unknown>;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:'open'|'closed'}
 const clean=(value:string|undefined,max=240)=>value?.trim().slice(0,max)??''
+const validToolSecret=(authType:ToolAuth,secret:Record<string,unknown>|undefined)=>{
+  if(authType==='none')return true
+  if(!secret)return false
+  if(authType==='bearer')return typeof secret.token==='string'&&secret.token.length>0&&secret.token.length<=4096
+  if(authType==='api_key')return typeof secret.header==='string'&&/^[A-Za-z0-9-]{1,64}$/.test(secret.header)&&typeof secret.value==='string'&&secret.value.length>0&&secret.value.length<=4096
+  return typeof secret.username==='string'&&secret.username.length>0&&secret.username.length<=256&&!secret.username.includes(':')&&typeof secret.password==='string'&&secret.password.length>0&&secret.password.length<=2048
+}
 
 Deno.serve(async(req:Request)=>{
   const cors=preflight(req);if(cors)return cors
@@ -54,11 +62,21 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(['update_tool','set_tool_active','delete_tool'].includes(body.action)){
-      const result=await admin.from('agent_tools').select('id,organization_id,name,code,is_active').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'tool_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN'])
+      const result=await admin.from('agent_tools').select('id,organization_id,name,code,is_active,method,endpoint_url,auth_type,requires_verification,requires_human_approval,timeout_seconds').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'tool_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN'])
       if(body.action==='update_tool'){
         let endpoint:URL;try{endpoint=new URL(clean(body.endpointUrl,2048))}catch{return json({success:false,error:'invalid_tool_url'},400)}if(!['http:','https:'].includes(endpoint.protocol)||endpoint.username||endpoint.password)return json({success:false,error:'invalid_tool_url'},400)
-        const update=await admin.from('agent_tools').update({name:clean(body.name)||result.data.name,method:body.method??'GET',endpoint_url:endpoint.toString(),auth_type:body.authType??'none',requires_verification:body.requiresVerification??false,requires_human_approval:body.requiresHumanApproval??false,timeout_seconds:Math.min(30,Math.max(1,Math.round(body.timeoutSeconds??10)))}).eq('id',body.id)
-        if(update.error)return json({success:false,error:'tool_update_failed',detail:update.error.message},400);await audit('Update Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code});return json({success:true})
+        const previousAuth=(result.data.auth_type??'none') as ToolAuth;const nextAuth=body.authType??previousAuth
+        if(!['none','bearer','api_key','basic'].includes(nextAuth))return json({success:false,error:'unsupported_tool_auth_type'},400)
+        const changingAuth=nextAuth!==previousAuth
+        if(changingAuth&&nextAuth!=='none'&&!body.toolSecret)return json({success:false,error:'tool_credentials_required_for_auth_change'},400)
+        if(body.toolSecret&&!validToolSecret(nextAuth,body.toolSecret))return json({success:false,error:'invalid_tool_credentials'},400)
+        const next={name:clean(body.name)||result.data.name,method:body.method??result.data.method,endpoint_url:endpoint.toString(),auth_type:nextAuth,requires_verification:body.requiresVerification??result.data.requires_verification,requires_human_approval:body.requiresHumanApproval??result.data.requires_human_approval,timeout_seconds:Math.min(30,Math.max(1,Math.round(body.timeoutSeconds??result.data.timeout_seconds)))}
+        const update=await admin.from('agent_tools').update(next).eq('id',body.id);if(update.error)return json({success:false,error:'tool_update_failed',detail:update.error.message},400)
+        if(body.toolSecret&&nextAuth!=='none'){
+          const stored=await admin.rpc('set_agent_tool_secret',{p_tool_id:body.id,p_secret:body.toolSecret})
+          if(stored.error){await admin.from('agent_tools').update({name:result.data.name,method:result.data.method,endpoint_url:result.data.endpoint_url,auth_type:result.data.auth_type,requires_verification:result.data.requires_verification,requires_human_approval:result.data.requires_human_approval,timeout_seconds:result.data.timeout_seconds}).eq('id',body.id);return json({success:false,error:'tool_secret_store_failed',detail:stored.error.message},500)}
+        }
+        await audit('Update Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code,authType:nextAuth,credentialsUpdated:Boolean(body.toolSecret)});return json({success:true})
       }
       if(body.action==='set_tool_active'){
         if(typeof body.isActive!=='boolean')return json({success:false,error:'is_active_required'},400);const update=await admin.from('agent_tools').update({is_active:body.isActive}).eq('id',body.id);if(update.error)return json({success:false,error:'tool_status_failed',detail:update.error.message},400);await audit(body.isActive?'Enable Tool':'Disable Tool','agent_tool',body.id,result.data.organization_id);return json({success:true})
