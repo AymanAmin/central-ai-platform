@@ -1,0 +1,120 @@
+:root{
+  --control-height:38px;
+  --control-height-touch:44px;
+  --density-gap:9px;
+}
+
+/* Compact admin density: keep information-heavy screens calm without shrinking touch targets. */
+button{
+  min-height:36px;
+  padding:.5rem .76rem;
+  border-radius:8px;
+  font-size:.86rem;
+  line-height:1.2;
+}
+input,select,textarea{
+  min-height:var(--control-height);
+  padding:.54rem .7rem;
+  border-radius:8px;
+  font-size:.875rem;
+}
+textarea{min-height:96px;line-height:1.55}
+label{font-size:.82rem;line-height:1.35}
+
+.ghost{
+  background:transparent;
+  color:var(--navy);
+  border-color:var(--line-strong);
+  box-shadow:none;
+}
+.ghost:hover:not(:disabled){
+  background:var(--surface-muted);
+  color:var(--ink-strong);
+  border-color:#aebfc2;
+  box-shadow:none;
+  transform:none;
+}
+.small{min-height:32px;padding:.36rem .58rem;font-size:.75rem}
+.form-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.field-help{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:.72rem;
+  font-weight:450;
+  line-height:1.45;
+  max-width:68ch;
+}
+label>.field-help{margin-bottom:1px}
+.grid-form>label,.form-row>label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.grid-form>button,.form-row>button{align-self:end}
+.check-label{font-size:.8rem;line-height:1.35}
+.check-label .field-help{margin-inline-start:25px}
+
+.shell{grid-template-columns:264px minmax(0,1fr)}
+.sidebar{padding:15px 12px}
+.sidebar-header{padding-bottom:10px}
+.scope-chip{margin-bottom:11px;padding:8px 9px}
+.sidebar nav{gap:9px}
+.nav-items button{min-height:34px;padding:.48rem .62rem;font-size:.82rem}
+.sidebar-footer{padding-top:10px}
+.workspace-bar{height:50px;padding-inline:26px}
+.main{padding:28px clamp(16px,2.5vw,36px) 44px}
+.page-header{min-height:64px;margin-bottom:18px;gap:20px}
+.page-header h1{font-size:clamp(1.55rem,1.9vw,2rem)}
+.page-header p{font-size:.87rem;margin-top:.4rem}
+.page-kicker{font-size:.64rem;margin-bottom:5px}
+.actions{gap:7px}
+.card{padding:16px;margin-bottom:14px;border-radius:12px}
+.card h2{font-size:.96rem;margin-bottom:11px}
+.card h3{font-size:.88rem;margin:.2rem 0 .65rem}
+.stack{gap:10px}
+.two-col,.split{gap:14px}
+.form-row,.grid-form{gap:var(--density-gap)}
+.settings-grid{gap:10px;margin-bottom:13px}
+.settings-grid label{gap:5px}
+.stats{gap:11px}
+.stats .card{min-height:118px}
+.metric-card strong{font-size:clamp(1.4rem,1.8vw,1.85rem)}
+.metric-card small{font-size:.67rem}
+.platform-route{padding:15px 16px;margin-bottom:13px}
+.route-step{min-height:74px;padding:11px 12px}
+.route-step strong{font-size:.8rem}
+.route-step small{font-size:.66rem}
+
+table{font-size:.82rem}
+th,td{padding:.58rem .65rem}
+th{font-size:.64rem}
+.list-row{padding:.6rem .7rem;font-size:.82rem}
+.bubble{padding:9px 11px}
+.notice{padding:9px 11px;font-size:.82rem}
+.secret-once{padding:10px}
+.auth-card{padding:29px!important}
+.auth-card h1{font-size:1.5rem;margin-bottom:1.1rem}
+
+@media(max-width:1000px){
+  .workspace-bar{height:50px}
+  .main{padding:24px 16px 34px}
+  .sidebar{padding:15px 12px}
+}
+
+@media(max-width:680px){
+  .main{padding:18px 11px 28px}
+  .page-header{gap:10px;margin-bottom:14px}
+  .page-header h1{font-size:1.55rem}
+  .page-header p{font-size:.82rem}
+  .actions{gap:6px}
+  .actions>button{flex:0 1 auto}
+  .card{padding:12px;margin-bottom:10px}
+  .stats .card{min-height:108px}
+  .grid-form>button,.form-row>button{width:100%}
+  th,td{padding:.56rem .58rem}
+  .field-help{font-size:.7rem}
+}
+
+@media(pointer:coarse){
+  button,input,select{min-height:var(--control-height-touch)}
+  .small{min-height:40px}
+  .nav-items button{min-height:42px}
+  .mobile-menu-toggle,.sidebar-close{min-height:40px}
+}
