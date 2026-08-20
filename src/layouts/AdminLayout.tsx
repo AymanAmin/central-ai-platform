@@ -23,7 +23,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       items:[
         {key:'organizations',label:tr('الجهات','Organizations')},
         {key:'users',label:tr('المستخدمون','Users')},
-        {key:'api-clients',label:'API Clients'},
+        {key:'api-clients',label:tr('عملاء واجهة API','API Clients')},
         {key:'integration',label:tr('دليل الربط','Integration Guide')},
       ],
     },
@@ -31,7 +31,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       label:tr('المعرفة والذكاء','Knowledge & AI'),
       items:[
         {key:'knowledge',label:tr('المعرفة','Knowledge')},
-        {key:'playground',label:'AI Playground'},
+        {key:'playground',label:tr('مختبر الذكاء الاصطناعي','AI Playground')},
         {key:'ai-settings',label:tr('إعدادات الذكاء الاصطناعي','AI Settings')},
         {key:'prompts',label:tr('التوجيهات','Prompts')},
         {key:'tools',label:tr('أدوات الوكيل','Agent Tools')},
@@ -96,7 +96,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       <div className="sidebar-header">
         <div className="brand" aria-label="Central AI Platform">
           <span className="brand-signal" aria-hidden="true"><i/><i/><i/></span>
-          <span className="brand-copy"><strong>Central AI</strong><small>Control Plane</small></span>
+          <span className="brand-copy"><strong>Central AI</strong><small>{tr('منصة التحكم','Control Plane')}</small></span>
         </div>
         <button className="sidebar-close" type="button" aria-label={tr('إغلاق القائمة','Close menu')} onClick={()=>setMenuOpen(false)}>×</button>
       </div>

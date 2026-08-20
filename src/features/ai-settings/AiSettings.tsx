@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, PageHeader } from '../../components/Ui'
+import { Card, FieldHint, PageHeader } from '../../components/Ui'
 import { adminApi } from '../../lib/adminApi'
 import { useI18n } from '../../lib/i18n'
 import { supabase } from '../../lib/supabase'
@@ -34,6 +34,8 @@ interface ProviderTestResult {
   inputTokens: number
   outputTokens: number
 }
+
+const nullableNumber = (value: string) => value === '' ? null : Number(value)
 
 export function AiSettings({ profile }: { profile: Profile }) {
   const { tr } = useI18n()
@@ -110,7 +112,10 @@ export function AiSettings({ profile }: { profile: Profile }) {
   }
 
   return <>
-    <PageHeader title={tr('إعدادات الذكاء الاصطناعي', 'AI Settings')} />
+    <PageHeader
+      title={tr('إعدادات الذكاء الاصطناعي', 'AI Settings')}
+      description={tr('تحكم في الاسترجاع والذاكرة وحدود التكلفة والتحويل البشري لكل جهة.', 'Control retrieval, memory, cost limits, and human handoff for each organization.')}
+    />
 
     {profile.role === 'SUPER_ADMIN' && <Card>
       <h2>{tr('مزود الذكاء الاصطناعي', 'AI Provider')}</h2>
@@ -126,6 +131,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
         <form className="stack" onSubmit={saveProviderSecret} style={{ marginTop: 12 }}>
           <label>{tr('مفتاح Gemini API', 'Gemini API key')}
             <input type="password" autoComplete="new-password" value={providerSecret} onChange={e => setProviderSecret(e.target.value)} placeholder={provider.configured ? tr('أدخل مفتاحًا جديدًا للاستبدال', 'Enter a new key to replace it') : 'AIza…'} />
+            <FieldHint>{tr('يُستخدم المفتاح للاتصال بـGemini من الخادم فقط، ولا يظهر مرة أخرى بعد الحفظ.', 'The key is used server-side to call Gemini and is not displayed again after saving.')}</FieldHint>
           </label>
           <small>{tr('لا يتم عرض المفتاح الحالي أو حفظه في المتصفح. يُرسل عبر HTTPS ويُخزن مشفرًا في Supabase Vault.', 'The current key is never displayed or stored in the browser. It is sent over HTTPS and encrypted in Supabase Vault.')}</small>
           <div className="form-actions">
@@ -133,29 +139,66 @@ export function AiSettings({ profile }: { profile: Profile }) {
             <button type="button" className="ghost" disabled={providerBusy || !provider.configured} onClick={() => void testProvider()}>{tr('اختبار الاتصال', 'Test connection')}</button>
           </div>
         </form>
-      </> : <p>{tr('جاري تحميل إعدادات المزود…', 'Loading provider settings…')}</p>}
+      </> : <p>{tr('جارٍ تحميل إعدادات المزود…', 'Loading provider settings…')}</p>}
       {providerMsg && <p>{providerMsg}</p>}
     </Card>}
 
     {profile.role === 'SUPER_ADMIN' && <Card>
-      <select value={orgId} onChange={e => setOrgId(e.target.value)}>
-        <option value="">{tr('اختر الجهة', 'Select organization')}</option>
-        {orgs.map(o => <option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}
-      </select>
+      <label>{tr('الجهة التي تريد تعديل إعداداتها', 'Organization to configure')}
+        <select value={orgId} onChange={e => setOrgId(e.target.value)}>
+          <option value="">{tr('اختر الجهة', 'Select organization')}</option>
+          {orgs.map(o => <option key={o.id} value={o.id}>{o.name_ar} / {o.name_en}</option>)}
+        </select>
+        <FieldHint>{tr('كل جهة تحتفظ بإعدادات مستقلة ولا تتأثر الجهات الأخرى بهذه التغييرات.', 'Each organization keeps independent settings; other organizations are not affected.')}</FieldHint>
+      </label>
     </Card>}
 
     {s && <Card>
       <div className="settings-grid">
-        <label><span>{tr('المعرفة فقط', 'Knowledge only')}</span><input type="checkbox" checked={s.knowledge_only} onChange={e => setS({ ...s, knowledge_only: e.target.checked })} /></label>
-        <label><span>{tr('السماح بالمعرفة العامة', 'Allow general knowledge')}</span><input type="checkbox" checked={s.allow_general_knowledge} onChange={e => setS({ ...s, allow_general_knowledge: e.target.checked })} /></label>
-        <label>{tr('عدد النتائج المسترجعة', 'Top K')}<input type="number" value={s.rag_top_k} onChange={e => setS({ ...s, rag_top_k: Number(e.target.value) })} /></label>
-        <label>{tr('الحد الأدنى للتشابه', 'Min similarity')}<input type="number" step="0.01" value={s.min_similarity} onChange={e => setS({ ...s, min_similarity: Number(e.target.value) })} /></label>
-        <label>{tr('الرسائل الحديثة', 'Recent messages')}<input type="number" value={s.recent_messages_count} onChange={e => setS({ ...s, recent_messages_count: Number(e.target.value) })} /></label>
-        <label>{tr('حد إنشاء الملخص', 'Summary threshold')}<input type="number" value={s.summarize_after_count} onChange={e => setS({ ...s, summarize_after_count: Number(e.target.value) })} /></label>
-        <label>{tr('الحد الأقصى للمخرجات', 'Max output')}<input type="number" value={s.max_output_tokens} onChange={e => setS({ ...s, max_output_tokens: Number(e.target.value) })} /></label>
-        <label>{tr('حد التحويل البشري', 'Handoff threshold')}<input type="number" step="0.01" value={s.human_handoff_threshold} onChange={e => setS({ ...s, human_handoff_threshold: Number(e.target.value) })} /></label>
+        <label>
+          <span>{tr('الاعتماد على المعرفة فقط', 'Knowledge only')}</span>
+          <input type="checkbox" checked={s.knowledge_only} onChange={e => setS({ ...s, knowledge_only: e.target.checked })} />
+          <FieldHint>{tr('عند تفعيله لا يجيب المساعد عن معلومات مؤسسية غير موجودة في قاعدة المعرفة.', 'When enabled, the assistant avoids answering organization-specific facts that are not in the knowledge base.')}</FieldHint>
+        </label>
+        <label>
+          <span>{tr('السماح بالمعرفة العامة', 'Allow general knowledge')}</span>
+          <input type="checkbox" checked={s.allow_general_knowledge} onChange={e => setS({ ...s, allow_general_knowledge: e.target.checked })} />
+          <FieldHint>{tr('يسمح للنموذج باستخدام معلومات عامة عند عدم تعارضها مع سياسة الجهة.', 'Allows the model to use general knowledge when it does not conflict with organization policy.')}</FieldHint>
+        </label>
+        <label>{tr('عدد نتائج المعرفة', 'Knowledge results (Top K)')}
+          <input type="number" min={1} max={8} value={s.rag_top_k} onChange={e => setS({ ...s, rag_top_k: Number(e.target.value) })} />
+          <FieldHint>{tr('عدد المقاطع الأكثر صلة التي تُرسل للنموذج. القيمة المقترحة 4 للحفاظ على الدقة والتكلفة.', 'Number of most relevant chunks sent to the model. A value of 4 is recommended for accuracy and cost.')}</FieldHint>
+        </label>
+        <label>{tr('الحد الأدنى للتشابه', 'Minimum similarity')}
+          <input type="number" min={0} max={1} step="0.01" value={s.min_similarity} onChange={e => setS({ ...s, min_similarity: Number(e.target.value) })} />
+          <FieldHint>{tr('قيمة من 0 إلى 1. النتائج الأقل من هذا الحد لا تدخل في سياق الإجابة.', 'A value from 0 to 1. Retrieval results below this score are excluded from the answer context.')}</FieldHint>
+        </label>
+        <label>{tr('الرسائل الحديثة المحفوظة في السياق', 'Recent messages in context')}
+          <input type="number" min={2} max={20} value={s.recent_messages_count} onChange={e => setS({ ...s, recent_messages_count: Number(e.target.value) })} />
+          <FieldHint>{tr('عدد آخر الرسائل التي يقرأها النموذج مع ملخص المحادثة. القيمة الافتراضية المناسبة 6.', 'How many recent messages the model reads with the conversation summary. A good default is 6.')}</FieldHint>
+        </label>
+        <label>{tr('بدء تلخيص المحادثة بعد', 'Start summarizing after')}
+          <input type="number" min={8} max={100} value={s.summarize_after_count} onChange={e => setS({ ...s, summarize_after_count: Number(e.target.value) })} />
+          <FieldHint>{tr('عدد الرسائل الذي بعده يبدأ إنشاء ملخص لتقليل حجم السياق والتكلفة.', 'Message count after which a summary starts reducing context size and cost.')}</FieldHint>
+        </label>
+        <label>{tr('الحد الأقصى لرموز الإجابة', 'Maximum output tokens')}
+          <input type="number" min={64} max={4096} value={s.max_output_tokens} onChange={e => setS({ ...s, max_output_tokens: Number(e.target.value) })} />
+          <FieldHint>{tr('حد أقصى لطول رد النموذج. خفضه يجعل الردود أقصر ويقلل التكلفة.', 'Maximum model response length. Lower values keep answers shorter and reduce cost.')}</FieldHint>
+        </label>
+        <label>{tr('حد الثقة للتحويل البشري', 'Human handoff threshold')}
+          <input type="number" min={0} max={1} step="0.01" value={s.human_handoff_threshold} onChange={e => setS({ ...s, human_handoff_threshold: Number(e.target.value) })} />
+          <FieldHint>{tr('إذا انخفضت الثقة عن هذه القيمة يمكن تحويل المحادثة إلى موظف. مثال مناسب: 0.60.', 'If confidence falls below this value, the conversation can be handed to a person. A common value is 0.60.')}</FieldHint>
+        </label>
+        <label>{tr('حد الرسائل اليومي', 'Daily message limit')}
+          <input type="number" min={1} value={s.daily_message_limit ?? ''} placeholder={tr('بدون حد', 'No limit')} onChange={e => setS({ ...s, daily_message_limit: nullableNumber(e.target.value) })} />
+          <FieldHint>{tr('اتركه فارغًا إذا لم ترغب بوضع حد يومي لهذه الجهة.', 'Leave empty if this organization should not have a daily message limit.')}</FieldHint>
+        </label>
+        <label>{tr('حد الرسائل الشهري', 'Monthly message limit')}
+          <input type="number" min={1} value={s.monthly_message_limit ?? ''} placeholder={tr('بدون حد', 'No limit')} onChange={e => setS({ ...s, monthly_message_limit: nullableNumber(e.target.value) })} />
+          <FieldHint>{tr('يساعد على منع تجاوز ميزانية الرسائل خلال الشهر.', 'Helps prevent the organization from exceeding its monthly message budget.')}</FieldHint>
+        </label>
       </div>
-      <button onClick={() => void save()}>{tr('حفظ', 'Save')}</button>
+      <button onClick={() => void save()}>{tr('حفظ الإعدادات', 'Save settings')}</button>
       {msg && <p>{msg}</p>}
     </Card>}
   </>

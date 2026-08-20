@@ -95,9 +95,9 @@ export function SetupWizard({ profile, onNavigate }: { profile: Profile; onNavig
   const coreSteps = useMemo(() => [
     { key: 'provider', done: Boolean(provider?.configured), title: tr('ربط Gemini', 'Connect Gemini'), detail: provider?.configured ? `${provider.provider} · ${provider.chatModel}` : tr('أضف مفتاح Gemini API داخل Vault واختبر الاتصال.', 'Store the Gemini API key in Vault and test the connection.'), page: 'ai-settings' },
     { key: 'organization', done: hasOrganization, title: tr('إنشاء جهة', 'Create organization'), detail: hasOrganization ? tr('تم اختيار جهة نشطة.', 'An active organization is selected.') : tr('أنشئ أول جهة وحدد الاسم واللغة الافتراضية.', 'Create the first organization and choose its default language.'), page: 'organizations' },
-    { key: 'settings', done: hasOrganization && checks.settings, title: tr('إعدادات الجهة', 'Organization settings'), detail: checks.settings ? tr('سجل إعدادات الجهة موجود.', 'Organization settings are initialized.') : tr('أكمل إعدادات RAG والذاكرة والتحويل البشري.', 'Configure RAG, memory, and human handoff settings.'), page: 'ai-settings' },
-    { key: 'knowledge', done: hasKnowledge, title: tr('تجهيز المعرفة', 'Prepare knowledge'), detail: tr(`${checks.knowledgeBases} قاعدة · ${checks.readyDocuments} مستند جاهز · ${checks.faqs} FAQ`, `${checks.knowledgeBases} bases · ${checks.readyDocuments} ready documents · ${checks.faqs} FAQs`), page: 'knowledge' },
-    { key: 'client', done: checks.apiClients > 0, title: tr('إنشاء API Client', 'Create API Client'), detail: tr(`${checks.apiClients} عميل API نشط`, `${checks.apiClients} active API clients`), page: 'api-clients' },
+    { key: 'settings', done: hasOrganization && checks.settings, title: tr('إعدادات الجهة', 'Organization settings'), detail: checks.settings ? tr('سجل إعدادات الجهة موجود.', 'Organization settings are initialized.') : tr('أكمل إعدادات البحث في المعرفة والذاكرة والتحويل البشري.', 'Configure RAG, memory, and human handoff settings.'), page: 'ai-settings' },
+    { key: 'knowledge', done: hasKnowledge, title: tr('تجهيز المعرفة', 'Prepare knowledge'), detail: tr(`${checks.knowledgeBases} قاعدة · ${checks.readyDocuments} مستند جاهز · ${checks.faqs} سؤال شائع`, `${checks.knowledgeBases} bases · ${checks.readyDocuments} ready documents · ${checks.faqs} FAQs`), page: 'knowledge' },
+    { key: 'client', done: checks.apiClients > 0, title: tr('إنشاء عميل API', 'Create API Client'), detail: tr(`${checks.apiClients} عميل API نشط`, `${checks.apiClients} active API clients`), page: 'api-clients' },
   ], [provider, hasOrganization, checks, hasKnowledge, tr])
 
   const completed = coreSteps.filter(step => step.done).length
@@ -137,9 +137,9 @@ export function SetupWizard({ profile, onNavigate }: { profile: Profile; onNavig
     <Card>
       <h2>{tr('الاختبار النهائي', 'Final test')}</h2>
       {readyToTest ? <>
-        <div className="notice success">{tr('المتطلبات الأساسية جاهزة. نفّذ سؤالًا حقيقيًا في AI Playground ثم استخدم API Client لاختبار /chat.', 'Core requirements are ready. Run a real question in AI Playground, then use the API Client to test /chat.')}</div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-          <button type="button" onClick={() => onNavigate('playground')}>{tr('فتح AI Playground', 'Open AI Playground')}</button>
+        <div className="notice success">{tr('المتطلبات الأساسية جاهزة. نفّذ سؤالًا حقيقيًا في مختبر الذكاء الاصطناعي، ثم استخدم عميل API لاختبار مسار /chat.', 'Core requirements are ready. Run a real question in AI Playground, then use the API Client to test /chat.')}</div>
+        <div className="form-actions" style={{ marginTop: 12 }}>
+          <button type="button" onClick={() => onNavigate('playground')}>{tr('فتح مختبر الذكاء الاصطناعي', 'Open AI Playground')}</button>
           <button type="button" className="ghost" onClick={() => onNavigate('integration')}>{tr('فتح دليل الربط', 'Open integration guide')}</button>
         </div>
       </> : <div className="notice">{tr('أكمل الخطوات المطلوبة أعلاه قبل الاختبار النهائي.', 'Complete the required steps above before the final test.')}</div>}
