@@ -18,6 +18,7 @@ type DocumentRow = {
 }
 type ProviderSettings = { provider: string; chat_model: string; embedding_model: string }
 
+const EMBEDDING_INPUT_VERSION = 2
 const hashBytes = async (bytes: Uint8Array) => {
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
@@ -89,6 +90,20 @@ async function updateDocument(admin: SupabaseClient, documentId: string, values:
   if (updated.error) throw updated.error
 }
 
+function chunkEmbeddingInput(document: DocumentRow, content: string) {
+  const identity = [
+    `Document title: ${document.title}`,
+    document.source_url ? `Source URL: ${document.source_url}` : '',
+    document.original_file_name ? `File name: ${document.original_file_name}` : '',
+  ].filter(Boolean).join('\n')
+  return `${identity}\n\nContent:\n${content}`
+}
+
+function isCurrentEmbedding(metadata: unknown, embeddingModel: string | null, expectedModel: string) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false
+  return (metadata as Record<string, unknown>).embeddingInputVersion === EMBEDDING_INPUT_VERSION && embeddingModel === expectedModel
+}
+
 export async function processDocument(admin: SupabaseClient, documentId: string) {
   const started = performance.now()
   const { data: doc, error } = await admin
@@ -104,6 +119,7 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
 
     let bytes: Uint8Array
     let text: string
+    let fetchedMetadata: Record<string, unknown> | null = null
 
     if (d.source_type === 'manual_text') {
       text = String(d.metadata?.manualText ?? '').trim()
@@ -113,14 +129,13 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
       const fetched = await fetchKnowledgeUrl(d.source_url)
       text = fetched.text
       bytes = new TextEncoder().encode(text)
-      const metadata = {
+      fetchedMetadata = {
         ...d.metadata,
         fetchedAt: new Date().toISOString(),
         finalUrl: fetched.finalUrl,
         contentType: fetched.contentType,
         pageTitle: fetched.pageTitle,
       }
-      await updateDocument(admin, d.id, { metadata })
     } else {
       if (!d.storage_path) throw new Error('storage_path_missing')
       const downloaded = await admin.storage.from('knowledge').download(d.storage_path)
@@ -134,11 +149,25 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
     }
 
     if (!text.trim()) throw new Error('no_extractable_text')
-    const checksum = await hashBytes(bytes)
+    const settings = await providerFor(admin, d.organization_id)
+    if (!settings) throw new Error('ai_provider_not_configured')
+
+    const contentChecksum = await hashBytes(bytes)
+    const checksum = d.source_type === 'url'
+      ? await hashBytes(new TextEncoder().encode(`${d.source_url ?? ''}\n${contentChecksum}`))
+      : contentChecksum
+
+    if (fetchedMetadata) {
+      fetchedMetadata.contentFingerprint = contentChecksum
+      fetchedMetadata.embeddingInputVersion = EMBEDDING_INPUT_VERSION
+      await updateDocument(admin, d.id, { metadata: fetchedMetadata })
+    }
+
     if (d.checksum === checksum) {
-      const current = await admin.from('knowledge_chunks').select('id', { count: 'exact', head: true }).eq('document_id', d.id)
+      const current = await admin.from('knowledge_chunks').select('id,embedding_model,metadata', { count: 'exact' }).eq('document_id', d.id).limit(1)
       if (current.error) throw current.error
-      if ((current.count ?? 0) > 0) {
+      const first = current.data?.[0]
+      if ((current.count ?? 0) > 0 && first && isCurrentEmbedding(first.metadata, first.embedding_model, settings.embedding_model)) {
         await updateDocument(admin, d.id, { processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
         return { documentId: d.id, chunks: current.count, deduplicated: true, sameDocument: true, latencyMs: Math.round(performance.now() - started) }
       }
@@ -153,30 +182,32 @@ export async function processDocument(admin: SupabaseClient, documentId: string)
     if (existing.data) {
       const source = await admin.from('knowledge_chunks').select('chunk_index,content,token_count,page_number,section_title,embedding,embedding_model,metadata').eq('document_id', existing.data.id).order('chunk_index')
       if (source.error) throw source.error
-      const copies = (source.data ?? []).map(c => ({ ...c, id: crypto.randomUUID(), organization_id: d.organization_id, knowledge_base_id: d.knowledge_base_id, document_id: d.id }))
-      if (copies.length) {
-        const inserted = await admin.from('knowledge_chunks').insert(copies)
-        if (inserted.error) throw inserted.error
+      const sourceIsCurrent = (source.data ?? []).length > 0 && (source.data ?? []).every(c => isCurrentEmbedding(c.metadata, c.embedding_model, settings.embedding_model))
+      if (sourceIsCurrent) {
+        const copies = (source.data ?? []).map(c => ({ ...c, id: crypto.randomUUID(), organization_id: d.organization_id, knowledge_base_id: d.knowledge_base_id, document_id: d.id }))
+        if (copies.length) {
+          const inserted = await admin.from('knowledge_chunks').insert(copies)
+          if (inserted.error) throw inserted.error
+        }
+        await updateDocument(admin, d.id, { checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
+        return { documentId: d.id, chunks: copies.length, deduplicated: true, latencyMs: Math.round(performance.now() - started) }
       }
-      await updateDocument(admin, d.id, { checksum, processing_status: 'ready', processed_at: new Date().toISOString(), processing_error: null })
-      return { documentId: d.id, chunks: copies.length, deduplicated: true, latencyMs: Math.round(performance.now() - started) }
     }
 
     const chunks = chunkText(text)
     if (!chunks.length) throw new Error('no_chunks_created')
-    const settings = await providerFor(admin, d.organization_id)
-    if (!settings) throw new Error('ai_provider_not_configured')
     const ai = createAiProvider(settings)
     let embeddingTokens = 0
     const rows: Array<Record<string, unknown>> = []
     for (let i = 0; i < chunks.length; i += 32) {
       const batch = chunks.slice(i, i + 32)
-      const embedded = await ai.embedding(batch.map(c => c.content), 'RETRIEVAL_DOCUMENT')
+      const embedded = await ai.embedding(batch.map(c => chunkEmbeddingInput(d, c.content)), 'RETRIEVAL_DOCUMENT')
       embeddingTokens += embedded.tokens
       batch.forEach((c, j) => rows.push({
         id: crypto.randomUUID(), organization_id: d.organization_id, knowledge_base_id: d.knowledge_base_id, document_id: d.id,
         chunk_index: i + j, content: c.content, token_count: c.token_count, page_number: c.page_number, section_title: null,
-        embedding: vectorLiteral(embedded.vectors[j]!), embedding_model: settings.embedding_model, metadata: {},
+        embedding: vectorLiteral(embedded.vectors[j]!), embedding_model: settings.embedding_model,
+        metadata: { embeddingInputVersion: EMBEDDING_INPUT_VERSION, sourceTitle: d.title, sourceUrl: d.source_url },
       }))
     }
 
