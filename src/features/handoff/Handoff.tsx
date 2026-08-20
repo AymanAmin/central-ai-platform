@@ -2,5 +2,20 @@ import { useEffect,useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Card, Empty, PageHeader } from '../../components/Ui'
 import { useI18n } from '../../lib/i18n'
+
 interface Row{id:string;conversation_id:string;reason:string;requested_by:string;status:string;requested_at:string;assigned_user_id:string|null}
-export function Handoff(){const {tr,formatDate,valueLabel}=useI18n();const [rows,setRows]=useState<Row[]>([]);const load=async()=>{const r=await supabase.from('handoff_requests').select('*').in('status',['waiting','assigned']).order('requested_at');setRows((r.data??[]) as Row[])};useEffect(()=>{void load()},[]);const resolve=async(r:Row)=>{await supabase.from('handoff_requests').update({status:'resolved',resolved_at:new Date().toISOString()}).eq('id',r.id);await supabase.from('conversations').update({human_takeover:false,status:'open'}).eq('id',r.conversation_id);await load()};return <><PageHeader title={tr('التحويل البشري','Human Handoff')} description={tr('المحادثات المنتظرة للتحويل إلى موظف دعم.','Conversations waiting for a support agent.')}/><Card>{rows.length===0?<Empty>{tr('لا توجد محادثات بانتظار موظف.','No conversations are waiting for an agent.')}</Empty>:<table><thead><tr><th>{tr('المحادثة','Conversation')}</th><th>{tr('السبب','Reason')}</th><th>{tr('منذ','Since')}</th><th>{tr('الحالة','Status')}</th><th></th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.conversation_id.slice(0,8)}</td><td>{r.reason}</td><td>{formatDate(r.requested_at)}</td><td>{valueLabel(r.status)}</td><td><button className="small" onClick={()=>void resolve(r)}>{tr('حل واستئناف الذكاء الاصطناعي','Resolve & resume AI')}</button></td></tr>)}</tbody></table>}</Card></>}
+
+export function Handoff(){
+  const {tr,formatDate,valueLabel}=useI18n()
+  const [rows,setRows]=useState<Row[]>([])
+  const load=async()=>{const r=await supabase.from('handoff_requests').select('*').in('status',['waiting','assigned']).order('requested_at');setRows((r.data??[]) as Row[])}
+  useEffect(()=>{void load()},[])
+  const resolve=async(r:Row)=>{await supabase.from('handoff_requests').update({status:'resolved',resolved_at:new Date().toISOString()}).eq('id',r.id);await supabase.from('conversations').update({human_takeover:false,status:'open'}).eq('id',r.conversation_id);await load()}
+
+  return <>
+    <PageHeader title={tr('التحويل البشري','Human Handoff')} description={tr('تابع المحادثات التي تحتاج تدخل موظف والسبب الذي أدى إلى التحويل.','Track conversations that need a person and the reason that triggered the handoff.')}/>
+    <Card>
+      {rows.length===0?<Empty>{tr('لا توجد محادثات بانتظار موظف.','No conversations are waiting for an agent.')}</Empty>:<table><thead><tr><th>{tr('المحادثة','Conversation')}</th><th>{tr('سبب التحويل','Handoff reason')}</th><th>{tr('منذ','Since')}</th><th>{tr('الحالة','Status')}</th><th>{tr('إجراء','Action')}</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.conversation_id.slice(0,8)}</td><td>{valueLabel(r.reason)}</td><td>{formatDate(r.requested_at)}</td><td>{valueLabel(r.status)}</td><td><button className="small" onClick={()=>void resolve(r)}>{tr('حل الطلب واستئناف الذكاء الاصطناعي','Resolve and resume AI')}</button></td></tr>)}</tbody></table>}
+    </Card>
+  </>
+}
