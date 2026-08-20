@@ -9,6 +9,7 @@
     "build": "vite build",
     "typecheck": "tsc -b",
     "build:strict": "npm run typecheck && vite build",
+    "test:chat-smoke": "node scripts/smoke-chat.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
