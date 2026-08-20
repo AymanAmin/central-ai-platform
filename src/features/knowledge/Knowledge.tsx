@@ -12,6 +12,7 @@ export function Knowledge({ profile }: { profile: Profile }) {
   const [docs, setDocs] = useState<KnowledgeDocument[]>([])
   const [kbName, setKbName] = useState('')
   const [kbCode, setKbCode] = useState('')
+  const [kbModalOpen, setKbModalOpen] = useState(false)
   const [selectedKb, setSelectedKb] = useState('')
   const [contentLanguage, setContentLanguage] = useState<AppLanguage>(language)
   const [faqQ, setFaqQ] = useState('')
@@ -35,17 +36,38 @@ export function Knowledge({ profile }: { profile: Profile }) {
 
   useEffect(() => { void load() }, [])
 
+  useEffect(() => {
+    if (!kbModalOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setKbModalOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [kbModalOpen])
+
+  const closeKbModal = () => {
+    setKbModalOpen(false)
+    setKbName('')
+    setKbCode('')
+  }
+
   const createKb = async (e: FormEvent) => {
     e.preventDefault()
     const { data, error } = await supabase.from('knowledge_bases').insert({
       organization_id: organizationId,
-      name: kbName,
+      name: kbName.trim(),
       code: kbCode.toUpperCase().replace(/[^A-Z0-9_-]/g, '_'),
     }).select('id').single()
     setMessage(error?.message ?? tr('تم إنشاء قاعدة المعرفة.', 'Knowledge base created.'))
     if (data) {
       setKbName('')
       setKbCode('')
+      setKbModalOpen(false)
       setSelectedKb(data.id)
       await load()
     }
@@ -186,13 +208,19 @@ export function Knowledge({ profile }: { profile: Profile }) {
           </select>
           <FieldHint>{tr('تُعزل المعرفة بالكامل بين الجهات؛ اختر الجهة قبل إضافة أي مصدر.', 'Knowledge is fully isolated between organizations; select an organization before adding a source.')}</FieldHint>
         </label>}
-        <label>{tr('قاعدة المعرفة', 'Knowledge base')}
-          <select value={selectedKb} onChange={e => setSelectedKb(e.target.value)}>
-            <option value="">{tr('اختر قاعدة المعرفة', 'Select knowledge base')}</option>
-            {visibleBases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
+        <div className="context-field knowledge-base-field">
+          <label htmlFor="knowledge-base-select">{tr('قاعدة المعرفة', 'Knowledge base')}</label>
+          <div className="field-control-row">
+            <select id="knowledge-base-select" value={selectedKb} onChange={e => setSelectedKb(e.target.value)}>
+              <option value="">{tr('اختر قاعدة المعرفة', 'Select knowledge base')}</option>
+              {visibleBases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <button type="button" className="ghost small field-action-button" disabled={!organizationId} onClick={() => setKbModalOpen(true)}>
+              {tr('قاعدة جديدة', 'New base')}
+            </button>
+          </div>
           <FieldHint>{tr('استخدم قواعد منفصلة لموضوعات مثل القبول والرسوم والسياسات عندما يفيد ذلك في التنظيم.', 'Use separate bases for topics such as admissions, fees, and policies when it improves organization.')}</FieldHint>
-        </label>
+        </div>
         <label>{tr('لغة المحتوى', 'Content language')}
           <select value={contentLanguage} onChange={e => setContentLanguage(e.target.value as AppLanguage)}>
             <option value="ar">{tr('محتوى عربي', 'Arabic content')}</option>
@@ -204,75 +232,55 @@ export function Knowledge({ profile }: { profile: Profile }) {
       {message && <div className="inline-feedback" role="status">{message}</div>}
     </Card>
 
-    <div className="knowledge-layout">
-      <Card className="knowledge-base-panel">
-        <PanelHeader
-          title={tr('إنشاء قاعدة معرفة', 'Create knowledge base')}
-          description={tr('أنشئ حاوية واضحة لمجموعة مصادر مرتبطة بنفس الموضوع.','Create a clear container for sources that belong to the same topic.')}
-          meta={<span className="panel-index">02</span>}
-        />
-        <form className="stack" onSubmit={createKb}>
-          <label>{tr('اسم قاعدة المعرفة', 'Knowledge base name')}
-            <input required placeholder={tr('مثال: القبول والتسجيل', 'Example: Admissions')} value={kbName} onChange={e => setKbName(e.target.value)} />
+    <Card className="source-panel knowledge-source-panel">
+      <PanelHeader
+        title={tr('إضافة مصدر معرفة', 'Add knowledge source')}
+        description={tr('اختر نوع المصدر الأنسب. كل مصدر يدخل نفس مسار المعالجة والعزل الخاص بالجهة.','Choose the most suitable source type. Every source follows the same organization-isolated processing path.')}
+        meta={<span className="panel-index">02</span>}
+      />
+      <div className="source-methods">
+        <section className="source-method">
+          <div className="source-method-head"><span className="source-method-index">A</span><div><h3>{tr('رفع ملف', 'Upload file')}</h3><p>{tr('للمستندات الرسمية والملفات المرجعية.','For official documents and reference files.')}</p></div></div>
+          <label>{tr('اختر ملفًا', 'Choose a file')}
+            <input type="file" accept=".pdf,.docx,.txt" disabled={!selectedKb} onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
+            <FieldHint>{tr('الأنواع المدعومة: PDF وDOCX وTXT، بحد أقصى 20MB. ملفات PDF يجب أن تحتوي على نص قابل للاستخراج.', 'Supported types: PDF, DOCX, and TXT up to 20MB. PDFs must contain extractable text.')}</FieldHint>
           </label>
-          <label>{tr('الكود', 'Code')}
-            <input required dir="ltr" placeholder="ADMISSIONS" value={kbCode} onChange={e => setKbCode(e.target.value)} />
-            <FieldHint>{tr('معرف تقني ثابت يُكتب عادةً بحروف إنجليزية كبيرة وأرقام وشرطة سفلية.', 'A stable technical identifier, usually uppercase letters, numbers, and underscores.')}</FieldHint>
-          </label>
-          <button disabled={!organizationId}>{tr('إنشاء قاعدة المعرفة', 'Create knowledge base')}</button>
-        </form>
-      </Card>
+        </section>
 
-      <Card className="source-panel">
-        <PanelHeader
-          title={tr('إضافة مصدر معرفة', 'Add knowledge source')}
-          description={tr('اختر نوع المصدر الأنسب. كل مصدر يدخل نفس مسار المعالجة والعزل الخاص بالجهة.','Choose the most suitable source type. Every source follows the same organization-isolated processing path.')}
-          meta={<span className="panel-index">03</span>}
-        />
-        <div className="source-methods">
-          <section className="source-method">
-            <div className="source-method-head"><span className="source-method-index">A</span><div><h3>{tr('رفع ملف', 'Upload file')}</h3><p>{tr('للمستندات الرسمية والملفات المرجعية.','For official documents and reference files.')}</p></div></div>
-            <label>{tr('اختر ملفًا', 'Choose a file')}
-              <input type="file" accept=".pdf,.docx,.txt" disabled={!selectedKb} onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f) }} />
-              <FieldHint>{tr('الأنواع المدعومة: PDF وDOCX وTXT، بحد أقصى 20MB. ملفات PDF يجب أن تحتوي على نص قابل للاستخراج.', 'Supported types: PDF, DOCX, and TXT up to 20MB. PDFs must contain extractable text.')}</FieldHint>
+        <section className="source-method">
+          <div className="source-method-head"><span className="source-method-index">B</span><div><h3>{tr('صفحة ويب', 'Web page')}</h3><p>{tr('لصفحة عامة محددة تريد إدخال محتواها إلى المعرفة.','For one public page whose content should be added to knowledge.')}</p></div></div>
+          <form className="source-inline-form" onSubmit={addUrl}>
+            <label>{tr('عنوان المصدر', 'Source title')}
+              <input placeholder={tr('اختياري — يُستخدم اسم الموقع إذا تُرك فارغًا', 'Optional — the site name is used if left empty')} value={urlTitle} onChange={e => setUrlTitle(e.target.value)} />
             </label>
-          </section>
+            <label className="source-url-field">{tr('رابط الصفحة', 'Page URL')}
+              <input required type="url" dir="ltr" inputMode="url" placeholder="https://example.com/page" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} />
+              <FieldHint>{tr('يتم جلب صفحة واحدة فقط. الروابط الداخلية والمحلية محظورة أمنيًا، والحد الأقصى للصفحة 2MB.', 'One page only. Private/internal addresses are blocked for security and the page limit is 2MB.')}</FieldHint>
+            </label>
+            <button disabled={!selectedKb}>{tr('إضافة صفحة الويب', 'Add web page')}</button>
+          </form>
+        </section>
 
-          <section className="source-method">
-            <div className="source-method-head"><span className="source-method-index">B</span><div><h3>{tr('صفحة ويب', 'Web page')}</h3><p>{tr('لصفحة عامة محددة تريد إدخال محتواها إلى المعرفة.','For one public page whose content should be added to knowledge.')}</p></div></div>
-            <form className="source-inline-form" onSubmit={addUrl}>
-              <label>{tr('عنوان المصدر', 'Source title')}
-                <input placeholder={tr('اختياري — يُستخدم اسم الموقع إذا تُرك فارغًا', 'Optional — the site name is used if left empty')} value={urlTitle} onChange={e => setUrlTitle(e.target.value)} />
-              </label>
-              <label className="source-url-field">{tr('رابط الصفحة', 'Page URL')}
-                <input required type="url" dir="ltr" inputMode="url" placeholder="https://example.com/page" value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} />
-                <FieldHint>{tr('يتم جلب صفحة واحدة فقط. الروابط الداخلية والمحلية محظورة أمنيًا، والحد الأقصى للصفحة 2MB.', 'One page only. Private/internal addresses are blocked for security and the page limit is 2MB.')}</FieldHint>
-              </label>
-              <button disabled={!selectedKb}>{tr('إضافة صفحة الويب', 'Add web page')}</button>
-            </form>
-          </section>
-
-          <section className="source-method">
-            <div className="source-method-head"><span className="source-method-index">C</span><div><h3>{tr('نص يدوي', 'Manual text')}</h3><p>{tr('للسياسات القصيرة أو المعلومات التي لا تحتاج ملفًا مستقلًا.','For short policies or information that does not need a separate file.')}</p></div></div>
-            <form className="source-inline-form" onSubmit={addManual}>
-              <label>{tr('عنوان النص', 'Text title')}
-                <input required placeholder={tr('مثال: سياسة استرداد الرسوم', 'Example: Refund policy')} value={manualTitle} onChange={e => setManualTitle(e.target.value)} />
-              </label>
-              <label className="source-text-field">{tr('المحتوى', 'Content')}
-                <textarea required rows={4} value={manualText} onChange={e => setManualText(e.target.value)} placeholder={tr('ألصق النص الذي تريد إضافته إلى المعرفة.', 'Paste the text you want to add to knowledge.')} />
-              </label>
-              <button disabled={!selectedKb}>{tr('إضافة النص', 'Add text')}</button>
-            </form>
-          </section>
-        </div>
-      </Card>
-    </div>
+        <section className="source-method">
+          <div className="source-method-head"><span className="source-method-index">C</span><div><h3>{tr('نص يدوي', 'Manual text')}</h3><p>{tr('للسياسات القصيرة أو المعلومات التي لا تحتاج ملفًا مستقلًا.','For short policies or information that does not need a separate file.')}</p></div></div>
+          <form className="source-inline-form" onSubmit={addManual}>
+            <label>{tr('عنوان النص', 'Text title')}
+              <input required placeholder={tr('مثال: سياسة استرداد الرسوم', 'Example: Refund policy')} value={manualTitle} onChange={e => setManualTitle(e.target.value)} />
+            </label>
+            <label className="source-text-field">{tr('المحتوى', 'Content')}
+              <textarea required rows={4} value={manualText} onChange={e => setManualText(e.target.value)} placeholder={tr('ألصق النص الذي تريد إضافته إلى المعرفة.', 'Paste the text you want to add to knowledge.')} />
+            </label>
+            <button disabled={!selectedKb}>{tr('إضافة النص', 'Add text')}</button>
+          </form>
+        </section>
+      </div>
+    </Card>
 
     <Card className="faq-panel">
       <PanelHeader
         title={tr('الأسئلة الشائعة', 'FAQ')}
         description={tr('أضف إجابات معتمدة يمكن استخدامها مباشرة عند وجود تطابق قوي لتقليل التكلفة وزيادة الثبات.','Add approved answers that can be returned directly on a strong match to reduce cost and improve consistency.')}
-        meta={<span className="panel-index">04</span>}
+        meta={<span className="panel-index">03</span>}
       />
       <form className="grid-form faq-form" onSubmit={addFaq}>
         <label>{tr('السؤال', 'Question')}
@@ -312,5 +320,34 @@ export function Knowledge({ profile }: { profile: Profile }) {
         </tr>)}</tbody>
       </table>}
     </Card>
+
+    {kbModalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) closeKbModal() }}>
+      <section className="modal-panel knowledge-base-modal" role="dialog" aria-modal="true" aria-labelledby="knowledge-base-modal-title">
+        <header className="modal-header">
+          <div>
+            <span className="modal-kicker">{tr('قاعدة المعرفة', 'Knowledge base')}</span>
+            <h2 id="knowledge-base-modal-title">{tr('إنشاء قاعدة معرفة جديدة', 'Create a new knowledge base')}</h2>
+            <p>{tr('أنشئ حاوية مستقلة لمصادر مرتبطة بنفس الموضوع. سيتم اختيار القاعدة الجديدة تلقائيًا بعد إنشائها.', 'Create a separate container for sources on the same topic. The new base will be selected automatically after creation.')}</p>
+          </div>
+          <button type="button" className="modal-close" onClick={closeKbModal} aria-label={tr('إغلاق النافذة', 'Close dialog')}>×</button>
+        </header>
+        <form className="modal-form" onSubmit={createKb}>
+          <div className="modal-body">
+            <label>{tr('اسم قاعدة المعرفة', 'Knowledge base name')}
+              <input autoFocus required placeholder={tr('مثال: القبول والتسجيل', 'Example: Admissions')} value={kbName} onChange={e => setKbName(e.target.value)} />
+              <FieldHint>{tr('استخدم اسمًا واضحًا يصف نوع المعلومات التي ستوضع داخل القاعدة.', 'Use a clear name that describes the type of information stored in this base.')}</FieldHint>
+            </label>
+            <label>{tr('الكود', 'Code')}
+              <input required dir="ltr" placeholder="ADMISSIONS" value={kbCode} onChange={e => setKbCode(e.target.value)} />
+              <FieldHint>{tr('معرف تقني ثابت بحروف إنجليزية كبيرة وأرقام وشرطة سفلية، مثل ADMISSIONS أو FEES_2026.', 'A stable technical identifier using uppercase letters, numbers, and underscores, such as ADMISSIONS or FEES_2026.')}</FieldHint>
+            </label>
+          </div>
+          <footer className="modal-actions">
+            <button type="button" className="ghost" onClick={closeKbModal}>{tr('إلغاء', 'Cancel')}</button>
+            <button type="submit" disabled={!organizationId || !kbName.trim() || !kbCode.trim()}>{tr('إنشاء قاعدة المعرفة', 'Create knowledge base')}</button>
+          </footer>
+        </form>
+      </section>
+    </div>}
   </div>
 }
