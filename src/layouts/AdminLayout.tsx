@@ -3,19 +3,20 @@ import type { Profile } from '../types/domain'
 import { signOut } from '../lib/auth'
 import { useI18n } from '../lib/i18n'
 import { LanguageSwitcher } from '../components/LanguageSwitcher'
+import { canAccessPage, type PageKey } from '../lib/permissions'
 
-type NavItem = { key: string; label: string }
+type NavItem = { key: PageKey; label: string }
 type NavGroup = { label: string; items: NavItem[] }
 
 export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;page:string;onNavigate:(p:string)=>void;children:React.ReactNode}){
   const { tr, valueLabel, dir } = useI18n()
   const [menuOpen,setMenuOpen]=useState(false)
-  const groups:NavGroup[]=[
+  const allGroups:NavGroup[]=[
     {
       label:tr('مساحة العمل','Workspace'),
       items:[
         {key:'dashboard',label:tr('لوحة التحكم','Dashboard')},
-        ...(profile.role==='SUPER_ADMIN'?[{key:'setup',label:tr('معالج التهيئة','Setup Wizard')}]:[]),
+        {key:'setup',label:tr('معالج التهيئة','Setup Wizard')},
       ],
     },
     {
@@ -53,6 +54,9 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       ],
     },
   ]
+  const groups=allGroups
+    .map(group=>({...group,items:group.items.filter(item=>canAccessPage(profile.role,item.key))}))
+    .filter(group=>group.items.length>0)
 
   useEffect(()=>{
     if(!menuOpen)return
@@ -66,7 +70,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
     }
   },[menuOpen])
 
-  const navigate=(key:string)=>{
+  const navigate=(key:PageKey)=>{
     onNavigate(key)
     setMenuOpen(false)
   }
