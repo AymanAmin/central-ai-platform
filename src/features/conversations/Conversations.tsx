@@ -3,7 +3,28 @@ import { supabase } from '../../lib/supabase'
 import { Card, Empty, PageHeader } from '../../components/Ui'
 import type { Conversation } from '../../types/domain'
 import { useI18n } from '../../lib/i18n'
+
 interface Message{id:string;role:string;direction:string;content:string|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string}
-export function Conversations(){const {tr,formatDate,valueLabel}=useI18n();const [rows,setRows]=useState<Conversation[]>([]);const [selected,setSelected]=useState('');const [messages,setMessages]=useState<Message[]>([])
- useEffect(()=>{void supabase.from('conversations').select('*').order('last_message_at',{ascending:false}).limit(100).then(r=>setRows((r.data??[]) as Conversation[]))},[]);useEffect(()=>{if(!selected){setMessages([]);return}void supabase.from('messages').select('id,role,direction,content,intent,confidence,requires_human,created_at').eq('conversation_id',selected).order('created_at').then(r=>setMessages((r.data??[]) as Message[]))},[selected])
- return <><PageHeader title={tr('المحادثات','Conversations')} description={tr('الخط الزمني للمحادثة مع حالة الذكاء الاصطناعي أو الموظف والنية والثقة.','Conversation timeline with AI/human state, intent, and confidence.')}/><div className="split"><Card>{rows.length===0?<Empty>{tr('لا توجد محادثات.','No conversations found.')}</Empty>:rows.map(r=><button className={`list-row ${selected===r.id?'selected':''}`} key={r.id} onClick={()=>setSelected(r.id)}><strong>{r.external_conversation_id}</strong><span>{r.channel} · {valueLabel(r.status)}</span><small>{formatDate(r.last_message_at)}</small></button>)}</Card><Card><h2>{tr('الخط الزمني','Timeline')}</h2>{messages.length===0?<Empty>{tr('اختر محادثة.','Select a conversation.')}</Empty>:<div className="timeline">{messages.map(m=><div key={m.id} className={`bubble ${m.role}`}><div>{m.content}</div><small>{m.intent??'—'} · {tr('الثقة','confidence')} {m.confidence??'—'} {m.requires_human?`· ${tr('يتطلب موظفًا','human required')}`:''}</small></div>)}</div>}</Card></div></>}
+
+export function Conversations(){
+  const {tr,formatDate,valueLabel}=useI18n()
+  const [rows,setRows]=useState<Conversation[]>([])
+  const [selected,setSelected]=useState('')
+  const [messages,setMessages]=useState<Message[]>([])
+
+  useEffect(()=>{void supabase.from('conversations').select('*').order('last_message_at',{ascending:false}).limit(100).then(r=>setRows((r.data??[]) as Conversation[]))},[])
+  useEffect(()=>{if(!selected){setMessages([]);return}void supabase.from('messages').select('id,role,direction,content,intent,confidence,requires_human,created_at').eq('conversation_id',selected).order('created_at').then(r=>setMessages((r.data??[]) as Message[]))},[selected])
+
+  return <>
+    <PageHeader title={tr('المحادثات','Conversations')} description={tr('راجع خط المحادثة وحالة الذكاء الاصطناعي والنية والثقة والتحويل البشري.','Review the conversation timeline, AI state, intent, confidence, and human handoff.')}/>
+    <div className="split">
+      <Card>
+        {rows.length===0?<Empty>{tr('لا توجد محادثات.','No conversations found.')}</Empty>:rows.map(r=><button className={`list-row ${selected===r.id?'selected':''}`} key={r.id} onClick={()=>setSelected(r.id)}><strong>{r.external_conversation_id}</strong><span>{valueLabel(r.channel)} · {valueLabel(r.status)}</span><small>{formatDate(r.last_message_at)}</small></button>)}
+      </Card>
+      <Card>
+        <h2>{tr('الخط الزمني','Timeline')}</h2>
+        {messages.length===0?<Empty>{tr('اختر محادثة لعرض الرسائل.','Select a conversation to view messages.')}</Empty>:<div className="timeline">{messages.map(m=><div key={m.id} className={`bubble ${m.role}`}><div>{m.content}</div><small>{tr('النية','Intent')}: {valueLabel(m.intent)} · {tr('الثقة','Confidence')}: {m.confidence??'—'} {m.requires_human?`· ${tr('يتطلب موظفًا','Human required')}`:''}</small></div>)}</div>}
+      </Card>
+    </div>
+  </>
+}
