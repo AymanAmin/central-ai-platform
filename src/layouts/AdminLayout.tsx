@@ -8,7 +8,9 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
   const { tr, valueLabel, dir } = useI18n()
   const [menuOpen,setMenuOpen]=useState(false)
   const items=[
-    ['dashboard',tr('لوحة التحكم','Dashboard')],['organizations',tr('الجهات','Organizations')],['users',tr('المستخدمون','Users')],['api-clients','API Clients'],['integration',tr('دليل الربط','Integration Guide')],['knowledge',tr('المعرفة','Knowledge')],['playground','AI Playground'],['ai-settings',tr('إعدادات الذكاء الاصطناعي','AI Settings')],['prompts',tr('التوجيهات','Prompts')],['tools',tr('أدوات الوكيل','Agent Tools')],['customers',tr('العملاء','Customers')],['conversations',tr('المحادثات','Conversations')],['handoff',tr('التحويل البشري','Human Handoff')],['usage',tr('الاستخدام والتكلفة','Usage & Cost')],['audit',tr('سجل التدقيق','Audit Log')]
+    ['dashboard',tr('لوحة التحكم','Dashboard')],
+    ...(profile.role==='SUPER_ADMIN'?[["setup",tr('معالج التهيئة','Setup Wizard')]]:[]),
+    ['organizations',tr('الجهات','Organizations')],['users',tr('المستخدمون','Users')],['api-clients','API Clients'],['integration',tr('دليل الربط','Integration Guide')],['knowledge',tr('المعرفة','Knowledge')],['playground','AI Playground'],['ai-settings',tr('إعدادات الذكاء الاصطناعي','AI Settings')],['prompts',tr('التوجيهات','Prompts')],['tools',tr('أدوات الوكيل','Agent Tools')],['customers',tr('العملاء','Customers')],['conversations',tr('المحادثات','Conversations')],['handoff',tr('التحويل البشري','Human Handoff')],['usage',tr('الاستخدام والتكلفة','Usage & Cost')],['audit',tr('سجل التدقيق','Audit Log')]
   ]
 
   useEffect(()=>{
