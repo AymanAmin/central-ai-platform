@@ -10,6 +10,7 @@ import './app/web-chat.css'
 import './app/customer-chat-continuity.css'
 import './app/agent-plans.css'
 import './app/voice-chat.css'
+import './app/voice-contrast.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><I18nProvider><App /></I18nProvider></StrictMode>,
