@@ -15,6 +15,9 @@ alter table public.organization_agents
   drop constraint if exists organization_agents_included_voice_minutes_check,
   add constraint organization_agents_included_voice_minutes_check check (included_monthly_voice_minutes is null or included_monthly_voice_minutes >= 0);
 
+alter table public.model_pricing
+  add column if not exists audio_cost_per_minute numeric not null default 0 check (audio_cost_per_minute >= 0);
+
 create table if not exists public.message_attachments (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations(id) on delete cascade,
