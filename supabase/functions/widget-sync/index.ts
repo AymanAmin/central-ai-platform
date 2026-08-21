@@ -3,6 +3,7 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject=Record<string,unknown>
 interface Body{visitorId?:string;conversationId?:string}
+interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_voice:string|null;url?:string|null}
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
@@ -42,12 +43,28 @@ Deno.serve(async(req:Request)=>{
 
     const prefix=`web:${widget.id}:`
     const resumedConversationId=conversation.external_conversation_id.startsWith(prefix)?conversation.external_conversation_id.slice(prefix.length):conversationId
-    const messageResult=await admin.from('messages').select('id,role,direction,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant']).order('created_at',{ascending:true}).limit(200)
+    const messageResult=await admin.from('messages').select('id,role,direction,message_type,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant']).order('created_at',{ascending:true}).limit(200)
     if(messageResult.error)return send(origin,{success:false,error:'message_lookup_failed'},500)
-    const messages=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0).map(row=>{
+    const rows=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0)
+    const ids=rows.map(row=>row.id)
+    const audioByMessage=new Map<string,AudioMeta>()
+    if(ids.length){
+      const attachmentResult=await admin.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_voice').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('message_id',ids)
+      if(attachmentResult.error)return send(origin,{success:false,error:'attachment_lookup_failed'},500)
+      await Promise.all((attachmentResult.data??[]).map(async row=>{
+        const audio={...row,url:null} as AudioMeta
+        if(row.storage_path){
+          const signed=await admin.storage.from('chat-media').createSignedUrl(row.storage_path,300)
+          if(!signed.error&&signed.data?.signedUrl)audio.url=signed.data.signedUrl
+        }
+        audioByMessage.set(row.message_id,audio)
+      }))
+    }
+    const messages=rows.map(row=>{
       const contentJson=(row.content_json??{}) as JsonObject
       const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
-      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[]}
+      const audio=audioByMessage.get(row.id)
+      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceInput:row.role==='user'&&row.message_type==='audio',audio:audio?{source:audio.audio_source,url:audio.url??null,mimeType:audio.mime_type,durationMs:Number(audio.duration_ms??0),stored:Boolean(audio.original_audio_stored),voiceName:audio.generation_voice}:null}
     })
     return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
