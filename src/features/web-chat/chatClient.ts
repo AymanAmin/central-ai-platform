@@ -24,6 +24,7 @@ export interface WidgetPublicConfig{
   agentName:string|null
   voiceEnabled:boolean
   maxVoiceSeconds:number
+  voiceReplyMode:'text_only'|'voice_on_voice'|'always_voice'
   organization:{nameAr:string;nameEn:string|null;defaultLanguage:string}
 }
 export interface WidgetChatResponse{
@@ -39,6 +40,7 @@ export interface WidgetChatResponse{
   actions:Array<Record<string,unknown>>
   transcript?:string
   voice?:{durationMs?:number;mimeType?:string}
+  voiceReplyQueued?:boolean
 }
 export interface WidgetHistoryMessage{
   id:string
@@ -48,6 +50,12 @@ export interface WidgetHistoryMessage{
   source:'ai'|'human'|'customer'
   agentName:string|null
   actions:Array<Record<string,unknown>>
+  voiceDerived:boolean
+  audioUrl:string|null
+  audioKind:'audio'|'tts'|null
+  audioStored:boolean
+  audioDurationMs:number|null
+  voiceName:string|null
 }
 export interface WidgetSyncResponse{
   success:boolean
