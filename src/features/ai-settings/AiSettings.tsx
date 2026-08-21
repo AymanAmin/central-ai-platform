@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card, FieldHint, PageHeader } from '../../components/Ui'
 import { adminApi } from '../../lib/adminApi'
 import { useI18n } from '../../lib/i18n'
@@ -19,12 +19,12 @@ interface Settings {
   monthly_message_limit: number | null
 }
 
-interface ProviderStatus {
-  providerSettingId: string
+interface ProviderSetting {
+  id: string
   provider: string
-  chatModel: string
-  embeddingModel: string
-  configured: boolean
+  chat_model: string
+  embedding_model: string
+  is_default: boolean
 }
 
 interface ProviderTestResult {
@@ -37,16 +37,26 @@ interface ProviderTestResult {
 
 const nullableNumber = (value: string) => value === '' ? null : Number(value)
 
+const providerLabel = (provider: string) => {
+  if (provider === 'gemini') return 'Google Gemini'
+  if (provider === 'openrouter') return 'OpenRouter'
+  if (provider === 'openai') return 'OpenAI'
+  return provider
+}
+
 export function AiSettings({ profile }: { profile: Profile }) {
   const { tr } = useI18n()
   const [orgs, setOrgs] = useState<Organization[]>([])
   const [orgId, setOrgId] = useState(profile.organization_id ?? '')
   const [s, setS] = useState<Settings | null>(null)
   const [msg, setMsg] = useState('')
-  const [provider, setProvider] = useState<ProviderStatus | null>(null)
+  const [providers, setProviders] = useState<ProviderSetting[]>([])
+  const [providerId, setProviderId] = useState('')
   const [providerSecret, setProviderSecret] = useState('')
   const [providerMsg, setProviderMsg] = useState('')
   const [providerBusy, setProviderBusy] = useState(false)
+
+  const selectedProvider = useMemo(() => providers.find(item => item.id === providerId) ?? providers.find(item => item.is_default) ?? null, [providers, providerId])
 
   useEffect(() => {
     void supabase.from('organizations').select('*').then(r => setOrgs((r.data ?? []) as Organization[]))
@@ -60,30 +70,36 @@ export function AiSettings({ profile }: { profile: Profile }) {
     void supabase.from('organization_settings').select('*').eq('organization_id', orgId).maybeSingle().then(r => setS(r.data as Settings | null))
   }, [orgId])
 
+  const loadProviders = async () => {
+    const result = await supabase
+      .from('ai_provider_settings')
+      .select('id,provider,chat_model,embedding_model,is_default')
+      .is('organization_id', null)
+      .eq('is_active', true)
+      .order('provider')
+    if (result.error) {
+      setProviderMsg(result.error.message)
+      return
+    }
+    const next = (result.data ?? []) as ProviderSetting[]
+    setProviders(next)
+    setProviderId(current => current && next.some(item => item.id === current) ? current : (next.find(item => item.is_default)?.id ?? next[0]?.id ?? ''))
+  }
+
   useEffect(() => {
     if (profile.role !== 'SUPER_ADMIN') return
-    void loadProviderStatus()
+    void loadProviders()
   }, [profile.role])
-
-  const loadProviderStatus = async () => {
-    try {
-      const status = await adminApi<ProviderStatus>({ action: 'ai_provider_status' })
-      setProvider(status)
-    } catch (error) {
-      setProviderMsg(error instanceof Error ? error.message : tr('تعذر قراءة حالة المزود.', 'Unable to load provider status.'))
-    }
-  }
 
   const saveProviderSecret = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!provider || !providerSecret.trim()) return
+    if (!selectedProvider || !providerSecret.trim()) return
     setProviderBusy(true)
     setProviderMsg('')
     try {
-      await adminApi({ action: 'set_ai_provider_secret', providerSettingId: provider.providerSettingId, providerSecret })
+      await adminApi({ action: 'set_ai_provider_secret', providerSettingId: selectedProvider.id, providerSecret })
       setProviderSecret('')
-      setProviderMsg(tr('تم حفظ مفتاح Gemini بأمان داخل Supabase Vault.', 'Gemini API key was stored securely in Supabase Vault.'))
-      await loadProviderStatus()
+      setProviderMsg(tr(`تم حفظ مفتاح ${providerLabel(selectedProvider.provider)} بأمان داخل Supabase Vault.`, `${providerLabel(selectedProvider.provider)} API key was stored securely in Supabase Vault.`))
     } catch (error) {
       setProviderMsg(error instanceof Error ? error.message : tr('تعذر حفظ المفتاح.', 'Unable to save the API key.'))
     } finally {
@@ -91,13 +107,26 @@ export function AiSettings({ profile }: { profile: Profile }) {
     }
   }
 
-  const testProvider = async () => {
-    if (!provider) return
+  const testProvider = async (activateAfterTest = false) => {
+    if (!selectedProvider) return
     setProviderBusy(true)
     setProviderMsg('')
     try {
-      const result = await adminApi<ProviderTestResult>({ action: 'test_ai_provider', providerSettingId: provider.providerSettingId })
-      setProviderMsg(tr(`الاتصال ناجح عبر ${result.model} خلال ${result.latencyMs} مللي ثانية.`, `Connection succeeded with ${result.model} in ${result.latencyMs} ms.`))
+      const result = await adminApi<ProviderTestResult>({ action: 'test_ai_provider', providerSettingId: selectedProvider.id })
+      if (activateAfterTest && !selectedProvider.is_default) {
+        const previousDefault = providers.find(item => item.is_default)
+        const disable = await supabase.from('ai_provider_settings').update({ is_default: false }).is('organization_id', null).neq('id', selectedProvider.id)
+        if (disable.error) throw disable.error
+        const enable = await supabase.from('ai_provider_settings').update({ is_default: true }).eq('id', selectedProvider.id).is('organization_id', null)
+        if (enable.error) {
+          if (previousDefault) await supabase.from('ai_provider_settings').update({ is_default: true }).eq('id', previousDefault.id)
+          throw enable.error
+        }
+        await loadProviders()
+        setProviderMsg(tr(`تم اختبار ${providerLabel(result.provider)} وتفعيله كمزوّد افتراضي خلال ${result.latencyMs} مللي ثانية.`, `${providerLabel(result.provider)} was tested and activated as the default provider in ${result.latencyMs} ms.`))
+      } else {
+        setProviderMsg(tr(`الاتصال ناجح عبر ${result.model} خلال ${result.latencyMs} مللي ثانية.`, `Connection succeeded with ${result.model} in ${result.latencyMs} ms.`))
+      }
     } catch (error) {
       setProviderMsg(error instanceof Error ? error.message : tr('فشل اختبار الاتصال.', 'Provider connection test failed.'))
     } finally {
@@ -114,29 +143,48 @@ export function AiSettings({ profile }: { profile: Profile }) {
   return <>
     <PageHeader
       title={tr('إعدادات الذكاء الاصطناعي', 'AI Settings')}
-      description={tr('تحكم في الاسترجاع والذاكرة وحدود التكلفة والتحويل البشري لكل جهة.', 'Control retrieval, memory, cost limits, and human handoff for each organization.')}
+      description={tr('تحكم في مزود الذكاء الاصطناعي والاسترجاع والذاكرة وحدود التكلفة والتحويل البشري لكل جهة.', 'Control the AI provider, retrieval, memory, cost limits, and human handoff for each organization.')}
     />
 
     {profile.role === 'SUPER_ADMIN' && <Card>
-      <h2>{tr('مزود الذكاء الاصطناعي', 'AI Provider')}</h2>
-      {provider ? <>
+      <div className="section-heading">
+        <div>
+          <h2>{tr('مزود الذكاء الاصطناعي', 'AI Provider')}</h2>
+          <p>{tr('Gemini يبقى الافتراضي، ويمكن تجهيز OpenRouter واختباره ثم تفعيله دون كشف المفاتيح للمتصفح.', 'Gemini remains the default; OpenRouter can be configured, tested, then activated without exposing secrets to the browser.')}</p>
+        </div>
+        {providers.find(item => item.is_default) && <span className="status-badge success">{tr('الافتراضي', 'Default')}: {providerLabel(providers.find(item => item.is_default)!.provider)}</span>}
+      </div>
+
+      {providers.length ? <>
         <div className="settings-grid">
-          <label>{tr('المزود', 'Provider')}<input value={provider.provider} readOnly /></label>
-          <label>{tr('نموذج المحادثة', 'Chat model')}<input value={provider.chatModel} readOnly /></label>
-          <label>{tr('نموذج التضمين', 'Embedding model')}<input value={provider.embeddingModel} readOnly /></label>
-        </div>
-        <div className={`notice ${provider.configured ? 'success' : 'error'}`}>
-          {provider.configured ? tr('مفتاح API مضبوط داخل Vault.', 'API key is configured in Vault.') : tr('مفتاح API غير مضبوط بعد.', 'API key is not configured yet.')}
-        </div>
-        <form className="stack" onSubmit={saveProviderSecret} style={{ marginTop: 12 }}>
-          <label>{tr('مفتاح Gemini API', 'Gemini API key')}
-            <input type="password" autoComplete="new-password" value={providerSecret} onChange={e => setProviderSecret(e.target.value)} placeholder={provider.configured ? tr('أدخل مفتاحًا جديدًا للاستبدال', 'Enter a new key to replace it') : 'AIza…'} />
-            <FieldHint>{tr('يُستخدم المفتاح للاتصال بـGemini من الخادم فقط، ولا يظهر مرة أخرى بعد الحفظ.', 'The key is used server-side to call Gemini and is not displayed again after saving.')}</FieldHint>
+          <label>{tr('المزود الذي تريد إدارته', 'Provider to manage')}
+            <select value={selectedProvider?.id ?? ''} onChange={e => { setProviderId(e.target.value); setProviderSecret(''); setProviderMsg('') }}>
+              {providers.map(item => <option key={item.id} value={item.id}>{providerLabel(item.provider)}{item.is_default ? tr(' — الافتراضي', ' — default') : ''}</option>)}
+            </select>
           </label>
-          <small>{tr('لا يتم عرض المفتاح الحالي أو حفظه في المتصفح. يُرسل عبر HTTPS ويُخزن مشفرًا في Supabase Vault.', 'The current key is never displayed or stored in the browser. It is sent over HTTPS and encrypted in Supabase Vault.')}</small>
+          <label>{tr('نموذج المحادثة', 'Chat model')}<input value={selectedProvider?.chat_model ?? ''} readOnly /></label>
+          <label>{tr('نموذج التضمين', 'Embedding model')}<input value={selectedProvider?.embedding_model ?? ''} readOnly /></label>
+        </div>
+
+        {selectedProvider?.provider === 'openrouter' && <div className="notice">
+          {tr('OpenRouter مضبوط على openrouter/free للمحادثة. التضمين يستخدم text-embedding-3-small بأبعاد 1536 للحفاظ على توافق RAG؛ لذلك المحادثة المجانية لا تعني أن التضمين بلا تكلفة.', 'OpenRouter uses openrouter/free for chat. Embeddings use text-embedding-3-small at 1536 dimensions to keep RAG compatible, so free chat does not mean embeddings are cost-free.')}
+        </div>}
+
+        <form className="stack" onSubmit={saveProviderSecret} style={{ marginTop: 12 }}>
+          <label>{tr(`مفتاح ${providerLabel(selectedProvider?.provider ?? '')} API`, `${providerLabel(selectedProvider?.provider ?? '')} API key`)}
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={providerSecret}
+              onChange={e => setProviderSecret(e.target.value)}
+              placeholder={selectedProvider?.provider === 'openrouter' ? 'sk-or-v1-…' : selectedProvider?.provider === 'gemini' ? 'AIza…' : tr('أدخل المفتاح الجديد', 'Enter a new API key')}
+            />
+            <FieldHint>{tr('يُرسل المفتاح عبر HTTPS إلى الخادم ويُخزن مشفرًا داخل Supabase Vault، ولا تتم إعادة عرضه.', 'The key is sent over HTTPS to the server, encrypted in Supabase Vault, and never displayed again.')}</FieldHint>
+          </label>
           <div className="form-actions">
             <button type="submit" disabled={providerBusy || !providerSecret.trim()}>{tr('حفظ المفتاح', 'Save API key')}</button>
-            <button type="button" className="ghost" disabled={providerBusy || !provider.configured} onClick={() => void testProvider()}>{tr('اختبار الاتصال', 'Test connection')}</button>
+            <button type="button" className="ghost" disabled={providerBusy || !selectedProvider} onClick={() => void testProvider(false)}>{tr('اختبار الاتصال', 'Test connection')}</button>
+            {!selectedProvider?.is_default && <button type="button" disabled={providerBusy || !selectedProvider} onClick={() => void testProvider(true)}>{tr('اختبار وتفعيل', 'Test & activate')}</button>}
           </div>
         </form>
       </> : <p>{tr('جارٍ تحميل إعدادات المزود…', 'Loading provider settings…')}</p>}

@@ -1,4 +1,5 @@
 import { createAdminClient } from './runtime.ts'
+import { OpenRouterProvider } from './openrouter.ts'
 
 export interface AiAction {
   type: 'open_url' | 'reply_option' | 'call_phone' | 'download_file' | 'human_handoff' | 'request_location' | 'open_screen' | 'custom'
@@ -263,6 +264,11 @@ function directProvider(settings: AiProviderSettings, key?: string): AiProvider 
     if (!resolved) throw new Error('openai_api_key_missing')
     return new OpenAiProvider(resolved, settings.chat_model, settings.embedding_model)
   }
+  if (settings.provider === 'openrouter') {
+    const resolved = key || Deno.env.get('OPENROUTER_API_KEY')
+    if (!resolved) throw new Error('openrouter_api_key_missing')
+    return new OpenRouterProvider(resolved, settings.chat_model, settings.embedding_model)
+  }
   throw new Error('ai_provider_not_configured')
 }
 
@@ -325,8 +331,8 @@ class VaultBackedProvider implements AiProvider {
 
 export function createAiProvider(settings: AiProviderSettings, explicitKey?: string): AiProvider {
   if (explicitKey) return directProvider(settings, explicitKey)
-  if (!['gemini', 'openai'].includes(settings.provider)) throw new Error('ai_provider_not_configured')
+  if (!['gemini', 'openai', 'openrouter'].includes(settings.provider)) throw new Error('ai_provider_not_configured')
   return new VaultBackedProvider(settings)
 }
 
-export const isAiProviderUnavailableError = (message: string) => message === 'ai_provider_not_configured' || message === 'gemini_api_key_missing' || message === 'openai_api_key_missing' || message === 'ai_provider_secret_lookup_failed'
+export const isAiProviderUnavailableError = (message: string) => message === 'ai_provider_not_configured' || message === 'gemini_api_key_missing' || message === 'openai_api_key_missing' || message === 'openrouter_api_key_missing' || message === 'ai_provider_secret_lookup_failed'
