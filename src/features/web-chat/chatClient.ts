@@ -56,6 +56,7 @@ export interface WidgetHistoryMessage{
   audioStored:boolean
   audioDurationMs:number|null
   voiceName:string|null
+  audioLanguage:'ar'|'en'|null
 }
 export interface WidgetSyncResponse{
   success:boolean
