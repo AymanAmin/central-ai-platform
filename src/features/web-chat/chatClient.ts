@@ -22,6 +22,8 @@ export interface WidgetPublicConfig{
   position:'bottom_right'|'bottom_left'
   publicTestEnabled:boolean
   agentName:string|null
+  voiceEnabled:boolean
+  maxVoiceSeconds:number
   organization:{nameAr:string;nameEn:string|null;defaultLanguage:string}
 }
 export interface WidgetChatResponse{
@@ -35,6 +37,8 @@ export interface WidgetChatResponse{
   requiresHuman:boolean
   humanHandoffReason:string|null
   actions:Array<Record<string,unknown>>
+  transcript?:string
+  voice?:{durationMs?:number;mimeType?:string}
 }
 export interface WidgetHistoryMessage{
   id:string
@@ -82,6 +86,21 @@ export async function loadWidgetConfig(key:string){
 }
 export async function sendWidgetMessage(key:string,input:{visitorId:string;conversationId:string;messageId:string;text:string;language:'ar'|'en';customer?:{name?:string;email?:string;phone?:string}}){
   const response=await fetch(`${functionsBaseUrl}/widget-chat`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify(input)})
+  return readJson<WidgetChatResponse>(response)
+}
+export async function sendWidgetVoice(key:string,input:{visitorId:string;conversationId:string;messageId:string;audio:Blob;durationMs:number;language:'ar'|'en';customer?:{name?:string;email?:string;phone?:string}}){
+  const form=new FormData()
+  form.set('visitorId',input.visitorId)
+  form.set('conversationId',input.conversationId)
+  form.set('messageId',input.messageId)
+  form.set('durationMs',String(Math.round(input.durationMs)))
+  form.set('language',input.language)
+  if(input.customer?.name)form.set('customerName',input.customer.name)
+  if(input.customer?.email)form.set('customerEmail',input.customer.email)
+  if(input.customer?.phone)form.set('customerPhone',input.customer.phone)
+  const ext=input.audio.type.includes('ogg')?'ogg':input.audio.type.includes('mp4')?'m4a':input.audio.type.includes('wav')?'wav':'webm'
+  form.set('audio',input.audio,`voice.${ext}`)
+  const response=await fetch(`${functionsBaseUrl}/widget-voice`,{method:'POST',headers:{'x-widget-key':key},body:form})
   return readJson<WidgetChatResponse>(response)
 }
 export async function syncWidgetConversation(key:string,input:{visitorId:string;conversationId:string}){

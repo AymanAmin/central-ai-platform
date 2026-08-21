@@ -28,11 +28,13 @@ Deno.serve(async(req:Request)=>{
     if(!key||!/^ai_widget_[A-Za-z0-9_-]{24,}$/.test(key))return send({success:false,error:'invalid_widget_key'},400)
     const widget=await admin.from('web_chat_widgets').select('id,organization_id,prompt_profile_id,name,public_key,title_ar,title_en,welcome_ar,welcome_en,placeholder_ar,placeholder_en,suggestions_ar,suggestions_en,primary_color,position,public_test_enabled,is_active').eq('public_key',key).maybeSingle()
     if(widget.error||!widget.data||!widget.data.is_active)return send({success:false,error:'widget_not_found'},404)
-    const [organization,prompt]=await Promise.all([
+    const [organization,prompt,agent]=await Promise.all([
       admin.from('organizations').select('name_ar,name_en,default_language,is_active').eq('id',widget.data.organization_id).single(),
       widget.data.prompt_profile_id?admin.from('prompt_profiles').select('name').eq('id',widget.data.prompt_profile_id).maybeSingle():Promise.resolve({data:null,error:null}),
+      admin.from('organization_agents').select('voice_enabled,max_voice_seconds').eq('organization_id',widget.data.organization_id).maybeSingle(),
     ])
     if(organization.error||!organization.data?.is_active)return send({success:false,error:'organization_unavailable'},404)
-    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,agentName:prompt.data?.name??null,organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
+    if(agent.error)throw agent.error
+    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,agentName:prompt.data?.name??null,voiceEnabled:Boolean(agent.data?.voice_enabled),maxVoiceSeconds:Number(agent.data?.max_voice_seconds??120),organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
   }catch(error){return send({success:false,error:'widget_config_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
