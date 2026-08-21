@@ -3,7 +3,7 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject=Record<string,unknown>
 interface Body{visitorId?:string;conversationId?:string}
-interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_voice:string|null;url?:string|null}
+interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_provider:string|null;generation_voice:string|null;url?:string|null}
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
@@ -49,9 +49,10 @@ Deno.serve(async(req:Request)=>{
     const ids=rows.map(row=>row.id)
     const audioByMessage=new Map<string,AudioMeta>()
     if(ids.length){
-      const attachmentResult=await admin.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_voice').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('message_id',ids)
+      const attachmentResult=await admin.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_provider,generation_voice').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('message_id',ids)
       if(attachmentResult.error)return send(origin,{success:false,error:'attachment_lookup_failed'},500)
-      await Promise.all((attachmentResult.data??[]).map(async row=>{
+      const readyAttachments=(attachmentResult.data??[]).filter(row=>row.generation_provider!=='pending')
+      await Promise.all(readyAttachments.map(async row=>{
         const audio={...row,url:null} as AudioMeta
         if(row.storage_path){
           const signed=await admin.storage.from('chat-media').createSignedUrl(row.storage_path,300)
