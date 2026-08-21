@@ -27,35 +27,3 @@ do update set
   output_cost_per_million = excluded.output_cost_per_million,
   embedding_cost_per_million = excluded.embedding_cost_per_million,
   is_active = excluded.is_active;
-
-create or replace function public.set_default_ai_provider(p_provider_setting_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  if not exists (
-    select 1
-    from public.ai_provider_settings
-    where id = p_provider_setting_id
-      and organization_id is null
-      and is_active = true
-  ) then
-    raise exception 'provider_setting_not_found';
-  end if;
-
-  update public.ai_provider_settings
-  set is_default = false, updated_at = now()
-  where organization_id is null and is_default = true;
-
-  update public.ai_provider_settings
-  set is_default = true, updated_at = now()
-  where id = p_provider_setting_id
-    and organization_id is null
-    and is_active = true;
-end;
-$$;
-
-revoke all on function public.set_default_ai_provider(uuid) from public, anon, authenticated;
-grant execute on function public.set_default_ai_provider(uuid) to service_role;
