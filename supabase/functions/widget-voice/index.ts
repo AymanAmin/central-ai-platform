@@ -3,6 +3,7 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject = Record<string, unknown>
 const clean = (value: FormDataEntryValue | null, max: number) => typeof value === 'string' ? value.trim().slice(0, max) : ''
+const allowedAudio = new Set(['audio/webm','audio/ogg','audio/wav','audio/x-wav','audio/mpeg','audio/mp3','audio/aac','audio/flac','audio/mp4'])
 const originHeaders = (origin: string) => ({
   'content-type': 'application/json; charset=utf-8',
   'access-control-allow-origin': origin || 'null',
@@ -36,6 +37,8 @@ Deno.serve(async (req: Request) => {
     const form = await req.formData()
     const audio = form.get('audio')
     if (!(audio instanceof File)) return send(origin, { success: false, error: 'audio_file_required' }, 400)
+    if (audio.size <= 0 || audio.size > 8 * 1024 * 1024) return send(origin, { success: false, error: 'audio_file_too_large' }, 413)
+    if (!allowedAudio.has(audio.type.toLowerCase())) return send(origin, { success: false, error: 'unsupported_audio_type' }, 415)
     const visitorId = clean(form.get('visitorId'), 160)
     const conversationId = clean(form.get('conversationId'), 160)
     const messageId = clean(form.get('messageId'), 160)
@@ -62,10 +65,7 @@ Deno.serve(async (req: Request) => {
     upstream.set('contextJson', JSON.stringify(context))
 
     const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/voice-message`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${secret.data}` },
-      body: upstream,
-      signal: AbortSignal.timeout(60000),
+      method: 'POST', headers: { authorization: `Bearer ${secret.data}` }, body: upstream, signal: AbortSignal.timeout(60000),
     })
     const payload = await response.json() as JsonObject
     return send(origin, payload, response.status)
