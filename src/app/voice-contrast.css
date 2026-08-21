@@ -1,0 +1,22 @@
+.public-chat-message.user .voice-origin-label{
+  display:inline-flex;
+  align-items:center;
+  width:max-content;
+  max-width:100%;
+  margin-top:8px;
+  padding:5px 9px;
+  border:1px solid rgba(255,255,255,.24);
+  border-radius:999px;
+  background:rgba(255,255,255,.14);
+  color:#fff;
+  font-weight:700;
+  line-height:1.35;
+  text-shadow:0 1px 1px rgba(0,0,0,.12);
+}
+
+@media(max-width:640px){
+  .public-chat-message.user .voice-origin-label{
+    font-size:.64rem;
+    padding:5px 8px;
+  }
+}
