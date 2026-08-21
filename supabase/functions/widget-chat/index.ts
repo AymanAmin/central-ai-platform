@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient } from '../_shared/runtime.ts'
+import { generateVoiceReplyForExternalMessage } from '../_shared/tts.ts'
 
 type JsonObject=Record<string,unknown>
 interface Body{
@@ -79,6 +80,7 @@ Deno.serve(async(req:Request)=>{
     })
     const payload=await chatResponse.json() as JsonObject
     if(!chatResponse.ok)return send(origin,{success:false,error:typeof payload.error==='string'?payload.error:'chat_failed'},chatResponse.status)
-    return send(origin,{success:true,conversationId:payload.conversationId??null,status:payload.status??'completed',answer:payload.answer??'',language:payload.language??customer.language,intent:payload.intent??null,confidence:payload.confidence??null,requiresHuman:payload.requiresHuman??false,humanHandoffReason:payload.humanHandoffReason??null,actions:Array.isArray(payload.actions)?payload.actions:[]})
+    EdgeRuntime.waitUntil(generateVoiceReplyForExternalMessage(admin,widget.organization_id,externalMessageId,false,language).catch(error=>console.error('tts_background_failed',error instanceof Error?error.message:error)))
+    return send(origin,{success:true,conversationId:payload.conversationId??null,status:payload.status??'completed',answer:payload.answer??'',language:payload.language??customer.language,intent:payload.intent??null,confidence:payload.confidence??null,requiresHuman:payload.requiresHuman??false,humanHandoffReason:payload.humanHandoffReason??null,actions:Array.isArray(payload.actions)?payload.actions:[],voiceReplyQueued:true})
   }catch(error){return send(origin,{success:false,error:'widget_chat_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
