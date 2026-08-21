@@ -3,12 +3,13 @@ import { VoiceNotePlayer } from '../../components/VoiceNotePlayer'
 import { loadWidgetConfig,loadWidgetDirectory,sendWidgetMessage,sendWidgetVoice,syncWidgetConversation,widgetSession,type WidgetAudio,type WidgetDirectoryItem,type WidgetHistoryMessage,type WidgetPublicConfig,type WidgetSession } from './chatClient'
 
 type Lang='ar'|'en'
-type ChatItem={id:string;role:'assistant'|'user';text:string;actions?:Array<Record<string,unknown>>;source?:string;agentName?:string|null;voiceInput?:boolean;audio?:WidgetAudio|null}
+type ChatItem={id:string;role:'assistant'|'user';text:string;createdAt?:string;actions?:Array<Record<string,unknown>>;source?:string;agentName?:string|null;voiceInput?:boolean;audio?:WidgetAudio|null}
 
 const hashWidget=()=>new URLSearchParams(location.hash.split('?')[1]??'').get('widget')??''
 const label=(lang:Lang,ar:string,en:string)=>lang==='ar'?ar:en
-const fromHistory=(items:WidgetHistoryMessage[]):ChatItem[]=>items.map(item=>({id:item.id,role:item.role,text:item.text,actions:item.actions,source:item.source,agentName:item.agentName,voiceInput:item.voiceInput,audio:item.audio}))
+const fromHistory=(items:WidgetHistoryMessage[]):ChatItem[]=>items.map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,actions:item.actions,source:item.source,agentName:item.agentName,voiceInput:item.voiceInput,audio:item.audio}))
 const clock=(ms:number)=>{const total=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`}
+const VOICE_REPLY_GRACE_MS=45_000
 
 export function PublicChat(){
   const [directory,setDirectory]=useState<WidgetDirectoryItem[]>([])
@@ -84,6 +85,7 @@ export function PublicChat(){
   const welcome=config?(language==='ar'?config.welcomeAr:config.welcomeEn):''
   const placeholder=config?(language==='ar'?config.placeholderAr:config.placeholderEn):''
   const suggestions=config?(language==='ar'?config.suggestionsAr:config.suggestionsEn):[]
+  const voiceReplyMode=config?.voiceReplyMode??'text_only'
 
   const choose=(key:string)=>{stopMedia();setError('');setConfig(null);setStarted(false);setMessages([]);setHumanTakeover(false);setSelectedKey(key)}
   const start=async()=>{
@@ -100,10 +102,10 @@ export function PublicChat(){
     if(!config||busy||recording)return
     const message=(value??text).trim();if(!message)return
     const current=session??widgetSession(config.key);if(!session)setSession(current)
-    setText('');setError('');setMessages(items=>[...items,{id:`pending-${crypto.randomUUID()}`,role:'user',text:message}]);setBusy(true)
+    setText('');setError('');setMessages(items=>[...items,{id:`pending-${crypto.randomUUID()}`,role:'user',text:message,createdAt:new Date().toISOString()}]);setBusy(true)
     try{
       const response=await sendWidgetMessage(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),text:message,language,customer:{name:customerName||undefined,email:customerEmail||undefined}})
-      try{await sync(config,current)}catch{if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,actions:response.actions,audio:response.voiceReply}])}
+      try{await sync(config,current)}catch{if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,createdAt:new Date().toISOString(),actions:response.actions,audio:response.voiceReply}])}
     }catch(err){setError(err instanceof Error?err.message:label(language,'تعذر إرسال الرسالة.','Message could not be sent.'))}finally{setBusy(false)}
   }
 
@@ -117,12 +119,12 @@ export function PublicChat(){
     if(!config||busy)return
     const current=session??widgetSession(config.key);if(!session)setSession(current)
     const pendingId=`voice-${crypto.randomUUID()}`
-    setBusy(true);setError('');setMessages(items=>[...items,{id:pendingId,role:'user',voiceInput:true,text:label(language,'🎙 رسالة صوتية — جارٍ تحويلها إلى نص…','🎙 Voice message — transcribing…')}])
+    setBusy(true);setError('');setMessages(items=>[...items,{id:pendingId,role:'user',voiceInput:true,text:label(language,'🎙 رسالة صوتية — جارٍ تحويلها إلى نص…','🎙 Voice message — transcribing…'),createdAt:new Date().toISOString()}])
     try{
       const response=await sendWidgetVoice(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),audio,durationMs,language,customer:{name:customerName||undefined,email:customerEmail||undefined}})
       try{await sync(config,current)}catch{
         if(response.transcript)setMessages(items=>items.map(item=>item.id===pendingId?{...item,text:response.transcript!,voiceInput:true}:item))
-        if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,actions:response.actions,audio:response.voiceReply}])
+        if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,createdAt:new Date().toISOString(),actions:response.actions,audio:response.voiceReply}])
       }
     }catch(err){setMessages(items=>items.filter(item=>item.id!==pendingId));setError(voiceError(err instanceof Error?err.message:'voice_failed'))}finally{setBusy(false)}
   }
@@ -180,16 +182,21 @@ export function PublicChat(){
     {started&&config&&<main className="public-chat-shell" style={{'--chat-accent':config.primaryColor} as React.CSSProperties}>
       <header className="public-chat-header"><div className="public-chat-agent"><span className="public-chat-agent-avatar">✦</span><div><strong>{title}</strong><small><i/>{humanTakeover?label(language,'موظف الدعم يتابع المحادثة','A support agent is handling this chat'):orgName+' · '+label(language,'متصل','Online')}</small></div></div><div className="public-chat-head-actions"><button onClick={()=>setLanguage(current=>current==='ar'?'en':'ar')} aria-label={label(language,'تغيير اللغة','Change language')}>{language==='ar'?'EN':'AR'}</button><button onClick={newChat} aria-label={label(language,'محادثة جديدة','New chat')}>↻</button></div></header>
       <div className="public-chat-context"><span>{humanTakeover?label(language,'دعم بشري','HUMAN SUPPORT'):label(language,'اختبار مباشر','LIVE TEST')}</span><p>{label(language,'الرسائل الجديدة تظهر تلقائيًا دون إعادة تحميل الصفحة.','New messages appear automatically without reloading the page.')}</p></div>
-      <section className="public-chat-messages" aria-live="polite">{messages.map(item=>{
+      <section className="public-chat-messages" aria-live="polite">{messages.map((item,index)=>{
         const assistantVoice=item.role==='assistant'&&item.audio?.source==='assistant_tts'&&Boolean(item.audio.url)
+        let previousUser:ChatItem|undefined
+        for(let cursor=index-1;cursor>=0;cursor-=1){const candidate=messages[cursor];if(candidate?.role==='user'){previousUser=candidate;break}}
+        const expectsVoice=item.role==='assistant'&&item.source!=='human'&&item.id!=='welcome'&&config.voiceEnabled&&(voiceReplyMode==='always_voice'||(voiceReplyMode==='voice_for_voice'&&Boolean(previousUser?.voiceInput)))
+        const createdAtMs=Date.parse(item.createdAt??'')
+        const voicePreparing=expectsVoice&&!assistantVoice&&Number.isFinite(createdAtMs)&&Date.now()-createdAtMs<VOICE_REPLY_GRACE_MS
         return <article key={item.id} className={`public-chat-message ${item.role}${assistantVoice?' has-voice-reply':''}`}>
-          {assistantVoice?<VoiceNotePlayer src={item.audio?.url} durationMs={item.audio?.durationMs} title={label(language,'رد صوتي','Voice reply')} voiceName={item.audio?.voiceName} fallbackText={item.text} locale={language}/>:<>
+          {assistantVoice?<VoiceNotePlayer src={item.audio?.url} durationMs={item.audio?.durationMs} title={label(language,'رد صوتي','Voice reply')} voiceName={item.audio?.voiceName} fallbackText={item.text} locale={language}/>:voicePreparing?<div className="voice-note-fallback" role="status">🔊 {label(language,'جارٍ تجهيز الرد الصوتي…','Preparing the voice reply…')}</div>:<>
             <div>{item.text}</div>
             {item.voiceInput&&<small className="voice-origin-label">🎙 {label(language,'النص مُفرّغ من رسالة صوتية','Text transcribed from a voice message')}</small>}
             {item.audio?.url&&<VoiceNotePlayer src={item.audio.url} durationMs={item.audio.durationMs} title={item.audio.source==='customer_voice'?label(language,'رسالة صوتية','Voice message'):label(language,'رد صوتي','Voice reply')} voiceName={item.audio.voiceName} locale={language}/>} 
           </>}
           {item.source==='human'&&<small>{item.agentName?`${label(language,'الموظف','Agent')}: ${item.agentName}`:label(language,'رد موظف الدعم','Support agent reply')}</small>}
-          {item.actions?.length?<div className="public-chat-message-actions">{item.actions.map((entry,index)=>typeof entry.label==='string'?<button key={`${item.id}-${index}`} onClick={()=>action(entry)}>{entry.label}</button>:null)}</div>:null}
+          {item.actions?.length?<div className="public-chat-message-actions">{item.actions.map((entry,actionIndex)=>typeof entry.label==='string'?<button key={`${item.id}-${actionIndex}`} onClick={()=>action(entry)}>{entry.label}</button>:null)}</div>:null}
         </article>
       })}{messages.length===1&&suggestions.length>0&&<div className="public-chat-suggestions">{suggestions.map(suggestion=><button key={suggestion} onClick={()=>void send(suggestion)}>{suggestion}</button>)}</div>}{busy&&<div className="public-chat-typing" aria-label={label(language,'جارٍ إرسال الرسالة','Sending message')}><span/><span/><span/></div>}{error&&<div className="public-chat-error" role="alert">{error}</div>}<div ref={endRef}/></section>
       <form className={`public-chat-composer${config.voiceEnabled?' voice-enabled':''}${recording?' is-recording':''}`} onSubmit={event=>{event.preventDefault();void send()}}>
