@@ -3,9 +3,11 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject=Record<string,unknown>
 interface Body{visitorId?:string;conversationId?:string}
+type AttachmentRow={message_id:string;kind:'audio'|'tts';bucket:string|null;storage_path:string|null;original_audio_stored:boolean;duration_ms:number|null;voice_name:string|null;language:string|null}
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
+const asObject=(value:unknown):JsonObject=>value&&typeof value==='object'&&!Array.isArray(value)?value as JsonObject:{}
 
 Deno.serve(async(req:Request)=>{
   const origin=req.headers.get('origin')??''
@@ -44,10 +46,27 @@ Deno.serve(async(req:Request)=>{
     const resumedConversationId=conversation.external_conversation_id.startsWith(prefix)?conversation.external_conversation_id.slice(prefix.length):conversationId
     const messageResult=await admin.from('messages').select('id,role,direction,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant']).order('created_at',{ascending:true}).limit(200)
     if(messageResult.error)return send(origin,{success:false,error:'message_lookup_failed'},500)
-    const messages=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0).map(row=>{
-      const contentJson=(row.content_json??{}) as JsonObject
-      const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
-      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[]}
+    const rows=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0)
+    const messageIds=rows.map(row=>row.id)
+    let attachmentRows:AttachmentRow[]=[]
+    if(messageIds.length){
+      const attachments=await admin.from('message_attachments').select('message_id,kind,bucket,storage_path,original_audio_stored,duration_ms,voice_name,language').eq('organization_id',widget.organization_id).in('message_id',messageIds)
+      if(attachments.error)return send(origin,{success:false,error:'attachment_lookup_failed'},500)
+      attachmentRows=(attachments.data??[]) as AttachmentRow[]
+    }
+    const mediaByMessage=new Map<string,{kind:'audio'|'tts';stored:boolean;durationMs:number|null;voiceName:string|null;language:string|null;audioUrl:string|null}>()
+    await Promise.all(attachmentRows.map(async attachment=>{
+      let audioUrl:string|null=null
+      if(attachment.original_audio_stored&&attachment.bucket&&attachment.storage_path){
+        const signed=await admin.storage.from(attachment.bucket).createSignedUrl(attachment.storage_path,900)
+        if(!signed.error)audioUrl=signed.data.signedUrl
+      }
+      mediaByMessage.set(attachment.message_id,{kind:attachment.kind,stored:Boolean(attachment.original_audio_stored),durationMs:attachment.duration_ms,voiceName:attachment.voice_name,language:attachment.language,audioUrl})
+    }))
+    const messages=rows.map(row=>{
+      const contentJson=asObject(row.content_json),context=asObject(contentJson.context),voiceContext=asObject(context.voice),source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai',media=mediaByMessage.get(row.id)
+      const voiceDerived=row.role==='user'&&(Object.keys(voiceContext).length>0||media?.kind==='audio'||row.content.startsWith('🎙 '))
+      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceDerived,audioUrl:media?.audioUrl??null,audioKind:media?.kind??null,audioStored:media?.stored??false,audioDurationMs:media?.durationMs??null,voiceName:media?.voiceName??null}
     })
     return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
