@@ -68,6 +68,7 @@ async function estimateCost(admin: SupabaseClient, model: string, inputTokens: n
 }
 
 export function shouldGenerateVoiceReply(settings: VoiceSettings, source: VoiceReplySource) {
+  if (!settings.voice_enabled) return false
   return settings.voice_reply_mode === 'always_voice' || (settings.voice_reply_mode === 'voice_for_voice' && source === 'voice')
 }
 
