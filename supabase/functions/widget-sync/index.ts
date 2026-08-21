@@ -3,7 +3,8 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject=Record<string,unknown>
 interface Body{visitorId?:string;conversationId?:string}
-interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_provider:string|null;generation_voice:string|null;url?:string|null}
+interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_provider:string|null;generation_voice:string|null;created_at:string;url?:string|null}
+const PENDING_TTS_WINDOW_MS=120_000
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
@@ -48,10 +49,18 @@ Deno.serve(async(req:Request)=>{
     const rows=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0)
     const ids=rows.map(row=>row.id)
     const audioByMessage=new Map<string,AudioMeta>()
+    const pendingTtsMessageIds=new Set<string>()
     if(ids.length){
-      const attachmentResult=await admin.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_provider,generation_voice').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('message_id',ids)
+      const attachmentResult=await admin.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_provider,generation_voice,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('message_id',ids)
       if(attachmentResult.error)return send(origin,{success:false,error:'attachment_lookup_failed'},500)
-      const readyAttachments=(attachmentResult.data??[]).filter(row=>row.generation_provider!=='pending')
+      const attachments=attachmentResult.data??[]
+      const now=Date.now()
+      attachments.forEach(row=>{
+        if(row.audio_source!=='assistant_tts'||row.generation_provider!=='pending')return
+        const createdAt=Date.parse(row.created_at)
+        if(Number.isFinite(createdAt)&&now-createdAt<=PENDING_TTS_WINDOW_MS)pendingTtsMessageIds.add(row.message_id)
+      })
+      const readyAttachments=attachments.filter(row=>row.generation_provider!=='pending')
       await Promise.all(readyAttachments.map(async row=>{
         const audio={...row,url:null} as AudioMeta
         if(row.storage_path){
@@ -61,7 +70,8 @@ Deno.serve(async(req:Request)=>{
         audioByMessage.set(row.message_id,audio)
       }))
     }
-    const messages=rows.map(row=>{
+    const visibleRows=rows.filter(row=>!(row.role==='assistant'&&pendingTtsMessageIds.has(row.id)))
+    const messages=visibleRows.map(row=>{
       const contentJson=(row.content_json??{}) as JsonObject
       const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
       const audio=audioByMessage.get(row.id)
