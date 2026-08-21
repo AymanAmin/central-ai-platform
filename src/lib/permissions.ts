@@ -2,13 +2,13 @@ import type { Profile } from '../types/domain'
 
 export type AppRole=Profile['role']
 export type PageKey=
-  |'dashboard'|'setup'|'organizations'|'users'|'api-clients'|'integration'|'web-widgets'
+  |'dashboard'|'setup'|'organizations'|'agents-plans'|'users'|'api-clients'|'integration'|'web-widgets'
   |'knowledge'|'playground'|'ai-settings'|'prompts'|'tools'
   |'customers'|'conversations'|'chat-test'|'handoff'|'usage'|'audit'
 
 const rolePages:Record<AppRole,ReadonlySet<PageKey>>={
   SUPER_ADMIN:new Set<PageKey>([
-    'dashboard','setup','organizations','users','api-clients','integration','web-widgets','knowledge','playground','ai-settings','prompts','tools',
+    'dashboard','setup','organizations','agents-plans','users','api-clients','integration','web-widgets','knowledge','playground','ai-settings','prompts','tools',
     'customers','conversations','chat-test','handoff','usage','audit',
   ]),
   ORGANIZATION_ADMIN:new Set<PageKey>([
@@ -23,7 +23,7 @@ const rolePages:Record<AppRole,ReadonlySet<PageKey>>={
 export const isPageKey=(value:string):value is PageKey=>Object.prototype.hasOwnProperty.call(pageOwners,value)
 
 const pageOwners:Record<PageKey,true>={
-  dashboard:true,setup:true,organizations:true,users:true,'api-clients':true,integration:true,'web-widgets':true,
+  dashboard:true,setup:true,organizations:true,'agents-plans':true,users:true,'api-clients':true,integration:true,'web-widgets':true,
   knowledge:true,playground:true,'ai-settings':true,prompts:true,tools:true,
   customers:true,conversations:true,'chat-test':true,handoff:true,usage:true,audit:true,
 }
