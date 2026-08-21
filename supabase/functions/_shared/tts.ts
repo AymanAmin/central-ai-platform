@@ -12,7 +12,7 @@ export interface TtsSettings{
 }
 
 const MAX_TTS_AUDIO_BYTES=8*1024*1024
-const TTS_RATE=24000
+const DEFAULT_TTS_RATE=24000
 const TTS_CHANNELS=1
 const TTS_SAMPLE_WIDTH=2
 const allowedVoices=new Set([
@@ -30,8 +30,20 @@ function base64Bytes(value:string){
   for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i)
   return bytes
 }
-
-function wavFromPcm(pcm:Uint8Array,rate=TTS_RATE,channels=TTS_CHANNELS,sampleWidth=TTS_SAMPLE_WIDTH){
+function concatBytes(parts:Uint8Array[]){
+  const total=parts.reduce((sum,part)=>sum+part.length,0),result=new Uint8Array(total)
+  let offset=0
+  for(const part of parts){result.set(part,offset);offset+=part.length}
+  return result
+}
+function pcmRate(mimeType:string|undefined){
+  const normalized=(mimeType??'').toLowerCase()
+  if(normalized&&!normalized.includes('l16')&&!normalized.includes('pcm'))throw new Error(`tts_audio_format_unsupported:${normalized.slice(0,80)}`)
+  const match=normalized.match(/rate=(\d{4,6})/),rate=match?Number(match[1]):DEFAULT_TTS_RATE
+  if(!Number.isFinite(rate)||rate<8000||rate>96000)throw new Error('tts_audio_rate_invalid')
+  return rate
+}
+function wavFromPcm(pcm:Uint8Array,rate:number,channels=TTS_CHANNELS,sampleWidth=TTS_SAMPLE_WIDTH){
   const headerSize=44,buffer=new ArrayBuffer(headerSize+pcm.length),view=new DataView(buffer),bytes=new Uint8Array(buffer)
   const write=(offset:number,text:string)=>{for(let i=0;i<text.length;i++)bytes[offset+i]=text.charCodeAt(i)}
   write(0,'RIFF');view.setUint32(4,36+pcm.length,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true)
@@ -105,11 +117,11 @@ async function synthesize(admin:SupabaseClient,settings:TtsSettings,text:string,
   })
   const payload=await response.json() as {candidates?:Array<{content?:{parts?:Array<{inlineData?:{data?:string;mimeType?:string}}>} }>;usageMetadata?:{promptTokenCount?:number;candidatesTokenCount?:number};error?:{message?:string}}
   if(!response.ok)throw new Error(`tts_generation_failed:${payload.error?.message??response.status}`)
-  const encoded=payload.candidates?.[0]?.content?.parts?.find(part=>part.inlineData?.data)?.inlineData?.data
-  if(!encoded)throw new Error('tts_generation_empty')
-  const pcm=base64Bytes(encoded),wav=wavFromPcm(pcm)
+  const audioParts=(payload.candidates?.[0]?.content?.parts??[]).filter(part=>Boolean(part.inlineData?.data))
+  if(!audioParts.length)throw new Error('tts_generation_empty')
+  const rate=pcmRate(audioParts[0]?.inlineData?.mimeType),pcm=concatBytes(audioParts.map(part=>base64Bytes(part.inlineData!.data!))),wav=wavFromPcm(pcm,rate)
   if(wav.length>MAX_TTS_AUDIO_BYTES)throw new Error('tts_audio_too_large')
-  const durationMs=Math.max(1,Math.round(pcm.length/(TTS_RATE*TTS_CHANNELS*TTS_SAMPLE_WIDTH)*1000))
+  const durationMs=Math.max(1,Math.round(pcm.length/(rate*TTS_CHANNELS*TTS_SAMPLE_WIDTH)*1000))
   const inputTokens=Number(payload.usageMetadata?.promptTokenCount??0),outputTokens=Number(payload.usageMetadata?.candidatesTokenCount??0)
   const estimatedCost=await estimateCost(admin,settings.model,inputTokens,outputTokens)
   return{wav,durationMs,inputTokens,outputTokens,estimatedCost,latencyMs:Math.round(performance.now()-started),voice}
@@ -132,7 +144,7 @@ export async function generateVoiceReplyForExternalMessage(admin:SupabaseClient,
   if(existing.error)throw existing.error
   if(existing.data)return{generated:false,reason:'already_exists'} as const
 
-  const language: 'ar'|'en'=assistant.data.language==='en'?'en':assistant.data.language==='ar'?'ar':languageHint
+  const language:'ar'|'en'=assistant.data.language==='en'?'en':assistant.data.language==='ar'?'ar':languageHint
   const result=await synthesize(admin,settings,text.slice(0,6000),language)
   if(settings.includedMonthlyTtsMinutes!=null){
     const start=monthStart(),rows=await admin.from('message_attachments').select('duration_ms').eq('organization_id',organizationId).eq('kind','tts').gte('created_at',start)
