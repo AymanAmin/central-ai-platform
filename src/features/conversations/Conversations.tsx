@@ -6,7 +6,8 @@ import { Badge, Card, Empty, Modal, PageHeader, PanelHeader } from '../../compon
 import type { Conversation, Customer, Profile } from '../../types/domain'
 import { useI18n } from '../../lib/i18n'
 
-interface Message{id:string;role:string;direction:string;content:string|null;content_json:Record<string,unknown>|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string}
+interface MessageAudio{audio_source:'customer_voice'|'assistant_tts'|string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_voice:string|null;audioUrl?:string|null}
+interface Message{id:string;role:string;direction:string;message_type:string|null;content:string|null;content_json:Record<string,unknown>|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string;audio?:MessageAudio|null}
 type HandoffReason='customer_requested'|'low_confidence'|'complaint'|'payment_issue'|'sensitive_request'|'tool_failed'|'manual'|'policy'
 
 const conversationTargetKey='central-ai:selected-conversation'
@@ -42,8 +43,19 @@ export function Conversations({profile}:{profile:Profile}){
     sessionStorage.removeItem(customerFilterKey)
   }
   const loadMessages=async(conversationId:string)=>{
-    const result=await supabase.from('messages').select('id,role,direction,content,content_json,intent,confidence,requires_human,created_at').eq('conversation_id',conversationId).order('created_at')
-    setMessages((result.data??[]) as Message[])
+    const [messageResult,attachmentResult]=await Promise.all([
+      supabase.from('messages').select('id,role,direction,message_type,content,content_json,intent,confidence,requires_human,created_at').eq('conversation_id',conversationId).order('created_at'),
+      supabase.from('message_attachments').select('message_id,audio_source,storage_path,mime_type,duration_ms,original_audio_stored,generation_voice').eq('conversation_id',conversationId).eq('kind','audio'),
+    ])
+    if(messageResult.error){setNotice(messageResult.error.message);return}
+    if(attachmentResult.error){setNotice(attachmentResult.error.message);setMessages((messageResult.data??[]) as Message[]);return}
+    const audioByMessage=new Map<string,MessageAudio>()
+    await Promise.all((attachmentResult.data??[]).map(async row=>{
+      const audio:MessageAudio={audio_source:row.audio_source,storage_path:row.storage_path,mime_type:row.mime_type,duration_ms:row.duration_ms,original_audio_stored:Boolean(row.original_audio_stored),generation_voice:row.generation_voice,audioUrl:null}
+      if(row.storage_path){const signed=await supabase.storage.from('chat-media').createSignedUrl(row.storage_path,300);if(!signed.error)audio.audioUrl=signed.data?.signedUrl??null}
+      audioByMessage.set(row.message_id,audio)
+    }))
+    setMessages((messageResult.data??[]).map(row=>({...row,audio:audioByMessage.get(row.id)??null})) as Message[])
   }
 
   useEffect(()=>{void load()},[customerFilter])
@@ -118,7 +130,7 @@ export function Conversations({profile}:{profile:Profile}){
 
           <Card className="support-customer-card"><PanelHeader title={tr('العميل','Customer')} description={tr('بيانات العميل المرتبط بهذه المحادثة.','Customer details linked to this conversation.')}/>{customer?<div className="support-customer-grid"><div><small>{tr('الاسم','Name')}</small><strong>{customer.display_name??'—'}</strong></div><div><small>{tr('المعرف الخارجي','External ID')}</small><code>{customer.external_customer_id}</code></div><div><small>{tr('الهاتف','Phone')}</small><span dir="ltr">{customer.phone??'—'}</span></div><div><small>{tr('البريد','Email')}</small><span dir="ltr">{customer.email??'—'}</span></div></div>:<Empty>{tr('تعذر تحميل بيانات العميل.','Customer details are unavailable.')}</Empty>}</Card>
 
-          <Card className="support-timeline-card"><PanelHeader title={tr('الخط الزمني','Timeline')} description={tr('تظهر رسائل العميل وردود AI والموظف تلقائيًا.','Customer, AI, and human-agent messages appear automatically.')}/>{messages.length===0?<Empty>{tr('لا توجد رسائل في هذه المحادثة.','No messages in this conversation.')}</Empty>:<div className="timeline">{messages.map(item=>{const human=item.content_json?.source==='human';return <div key={item.id} className={`bubble ${item.role}${human?' human-message':''}`}><div>{item.content}</div><small>{human?`${tr('موظف الدعم','Support agent')}${typeof item.content_json?.agentName==='string'?`: ${item.content_json.agentName}`:''}`:`${tr('النية','Intent')}: ${valueLabel(item.intent)} · ${tr('الثقة','Confidence')}: ${item.confidence??'—'}`} · {formatDate(item.created_at)} {item.requires_human?`· ${tr('يتطلب موظفًا','Human required')}`:''}</small></div>})}</div>}</Card>
+          <Card className="support-timeline-card"><PanelHeader title={tr('الخط الزمني','Timeline')} description={tr('تظهر رسائل العميل وردود AI والموظف، مع توضيح مصدر الرسائل الصوتية وحالة حفظ التسجيل.','Customer, AI, and human messages appear with voice origin and recording-retention status.')}/>{messages.length===0?<Empty>{tr('لا توجد رسائل في هذه المحادثة.','No messages in this conversation.')}</Empty>:<div className="timeline">{messages.map(item=>{const human=item.content_json?.source==='human',audio=item.audio;return <div key={item.id} className={`bubble ${item.role}${human?' human-message':''}`}><div>{item.content}</div>{audio?.audio_source==='customer_voice'&&<div className="voice-message-meta"><Badge tone="neutral">🎙 {tr('النص مُفرّغ من صوت','Transcribed from voice')}</Badge><span>{audio.original_audio_stored?tr('التسجيل الأصلي محفوظ','Original recording stored'):tr('التسجيل الأصلي غير محفوظ','Original recording not stored')}</span></div>}{audio?.audio_source==='assistant_tts'&&<div className="voice-message-meta"><Badge tone="good">🔊 {tr('رد صوتي مولّد','Generated voice reply')}</Badge><span>{audio.generation_voice?`${tr('الصوت','Voice')}: ${audio.generation_voice}`:''}</span></div>}{audio?.audioUrl&&<audio className="message-audio-player" controls preload="metadata" src={audio.audioUrl}/>}<small>{human?`${tr('موظف الدعم','Support agent')}${typeof item.content_json?.agentName==='string'?`: ${item.content_json.agentName}`:''}`:`${tr('النية','Intent')}: ${valueLabel(item.intent)} · ${tr('الثقة','Confidence')}: ${item.confidence??'—'}`} · {formatDate(item.created_at)} {item.requires_human?`· ${tr('يتطلب موظفًا','Human required')}`:''}</small></div>})}</div>}</Card>
 
           {selectedRow.human_takeover&&<Card className="support-reply-card"><PanelHeader title={tr('الرد على العميل','Reply to customer')} description={replyAllowed?tr('أنت تتحكم بالمحادثة. سيظهر ردك للعميل تلقائيًا.','You control this conversation. Your reply will appear to the customer automatically.'):waitingForClaim?tr('استلم المحادثة أولًا لتفعيل الرد.','Take over the conversation first to enable replies.'):tr('هذه المحادثة مسندة لموظف آخر.','This conversation is assigned to another agent.')}/>{replyAllowed?<form className="support-reply-form" onSubmit={e=>void sendReply(e)}><textarea rows={3} maxLength={4000} value={replyText} onChange={e=>setReplyText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void sendReply(e as unknown as React.FormEvent)}}} placeholder={tr('اكتب رد الموظف هنا…','Type the agent reply here…')} disabled={Boolean(busy)}/><div className="support-reply-actions"><span>{tr('Enter للإرسال · Shift+Enter لسطر جديد','Enter to send · Shift+Enter for a new line')}</span><button disabled={Boolean(busy)||!replyText.trim()}>{busy==='reply'?tr('جارٍ الإرسال…','Sending…'):tr('إرسال للعميل','Send to customer')}</button></div></form>:<div className="support-reply-disabled">{waitingForClaim&&<button disabled={Boolean(busy)} onClick={()=>void run('take_conversation',tr('تم استلام المحادثة ويمكنك الرد الآن.','Conversation claimed. You can reply now.'))}>{tr('استلام المحادثة وبدء الرد','Take over and start replying')}</button>}</div>}</Card>}
         </>}
