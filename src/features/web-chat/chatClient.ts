@@ -36,6 +36,29 @@ export interface WidgetChatResponse{
   humanHandoffReason:string|null
   actions:Array<Record<string,unknown>>
 }
+export interface WidgetHistoryMessage{
+  id:string
+  role:'assistant'|'user'
+  text:string
+  createdAt:string
+  source:'ai'|'human'|'customer'
+  agentName:string|null
+  actions:Array<Record<string,unknown>>
+}
+export interface WidgetSyncResponse{
+  success:boolean
+  exists:boolean
+  status:string
+  humanTakeover:boolean
+  assignedUserId?:string|null
+  messages:WidgetHistoryMessage[]
+}
+export interface WidgetSession{
+  visitorId:string
+  conversationId:string
+  hasExistingConversation:boolean
+  reset:()=>string
+}
 
 type ApiError={success?:boolean;error?:string;detail?:string}
 
@@ -59,14 +82,24 @@ export async function sendWidgetMessage(key:string,input:{visitorId:string;conve
   const response=await fetch(`${functionsBaseUrl}/widget-chat`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify(input)})
   return readJson<WidgetChatResponse>(response)
 }
-
-const safeStorage=(type:'local'|'session')=>{
-  try{return type==='local'?window.localStorage:window.sessionStorage}catch{return null}
+export async function syncWidgetConversation(key:string,input:{visitorId:string;conversationId:string}){
+  const response=await fetch(`${functionsBaseUrl}/widget-sync`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify(input),cache:'no-store'})
+  return readJson<WidgetSyncResponse>(response)
 }
-export function widgetSession(key:string){
-  const local=safeStorage('local'),session=safeStorage('session')
+
+const safeLocalStorage=()=>{try{return window.localStorage}catch{return null}}
+export function widgetSession(key:string):WidgetSession{
+  const local=safeLocalStorage()
   const visitorKey=`central-ai:${key}:visitor`,conversationKey=`central-ai:${key}:conversation`
-  let visitorId=local?.getItem(visitorKey)??'';if(!visitorId){visitorId=crypto.randomUUID();local?.setItem(visitorKey,visitorId)}
-  let conversationId=session?.getItem(conversationKey)??'';if(!conversationId){conversationId=crypto.randomUUID();session?.setItem(conversationKey,conversationId)}
-  return{visitorId,conversationId,reset:()=>{const next=crypto.randomUUID();session?.setItem(conversationKey,next);return next}}
+  let visitorId=local?.getItem(visitorKey)??''
+  if(!visitorId){visitorId=crypto.randomUUID();local?.setItem(visitorKey,visitorId)}
+  const storedConversation=local?.getItem(conversationKey)??''
+  let conversationId=storedConversation
+  if(!conversationId){conversationId=crypto.randomUUID();local?.setItem(conversationKey,conversationId)}
+  return{
+    visitorId,
+    conversationId,
+    hasExistingConversation:Boolean(storedConversation),
+    reset:()=>{const next=crypto.randomUUID();local?.setItem(conversationKey,next);return next},
+  }
 }
