@@ -23,6 +23,7 @@ export interface WidgetPublicConfig{
   publicTestEnabled:boolean
   agentName:string|null
   voiceEnabled:boolean
+  voiceReplyMode:'text_only'|'voice_for_voice'|'always_voice'
   maxVoiceSeconds:number
   organization:{nameAr:string;nameEn:string|null;defaultLanguage:string}
 }
@@ -92,7 +93,7 @@ export async function loadWidgetDirectory(){
   return payload.items
 }
 export async function loadWidgetConfig(key:string){
-  const response=await fetch(`${functionsBaseUrl}/widget-config?key=${encodeURIComponent(key)}`,{headers:{accept:'application/json'}})
+  const response=await fetch(`${functionsBaseUrl}/widget-config?key=${encodeURIComponent(key)}`,{headers:{accept:'application/json'},cache:'no-store'})
   const payload=await readJson<{success:boolean;widget:WidgetPublicConfig}>(response)
   return payload.widget
 }
