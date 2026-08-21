@@ -61,7 +61,7 @@ Deno.serve(async(req:Request)=>{
           admin.from('customers').update({display_name:clean(body.customer?.name,160)||undefined,email:clean(body.customer?.email,240)||undefined,phone:clean(body.customer?.phone,80)||undefined,language,last_seen_at:now}).eq('id',existingCustomer.data.id),
           admin.from('api_clients').update({last_used_at:now}).eq('id',widget.api_client_id),
         ])
-        return send(origin,{success:true,conversationId:existingConversation.data.id,status:'waiting_for_human',answer:'',language,intent:'human_support',confidence:1,requiresHuman:true,humanHandoffReason:'manual',actions:[]})
+        return send(origin,{success:true,conversationId:existingConversation.data.id,status:'waiting_for_human',answer:'',language,intent:'human_support',confidence:1,requiresHuman:true,humanHandoffReason:'manual',actions:[],voiceReply:null})
       }
     }
 
@@ -79,6 +79,16 @@ Deno.serve(async(req:Request)=>{
     })
     const payload=await chatResponse.json() as JsonObject
     if(!chatResponse.ok)return send(origin,{success:false,error:typeof payload.error==='string'?payload.error:'chat_failed'},chatResponse.status)
-    return send(origin,{success:true,conversationId:payload.conversationId??null,status:payload.status??'completed',answer:payload.answer??'',language:payload.language??customer.language,intent:payload.intent??null,confidence:payload.confidence??null,requiresHuman:payload.requiresHuman??false,humanHandoffReason:payload.humanHandoffReason??null,actions:Array.isArray(payload.actions)?payload.actions:[]})
+
+    let voiceReply:unknown=null
+    const voiceSettings=await admin.from('organization_agents').select('voice_reply_mode').eq('organization_id',widget.organization_id).maybeSingle()
+    if(!voiceSettings.error&&voiceSettings.data?.voice_reply_mode==='always_voice'){
+      try{
+        const ttsResponse=await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/tts-reply`,{method:'POST',headers:{authorization:`Bearer ${secret.data}`,'content-type':'application/json'},body:JSON.stringify({externalMessageId,source:'text'}),signal:AbortSignal.timeout(40000)})
+        const ttsPayload=await ttsResponse.json().catch(()=>null) as JsonObject|null
+        if(ttsResponse.ok&&ttsPayload?.generated===true)voiceReply=ttsPayload.audio??null
+      }catch{/* Text reply remains available if TTS is unavailable. */}
+    }
+    return send(origin,{success:true,conversationId:payload.conversationId??null,status:payload.status??'completed',answer:payload.answer??'',language:payload.language??customer.language,intent:payload.intent??null,confidence:payload.confidence??null,requiresHuman:payload.requiresHuman??false,humanHandoffReason:payload.humanHandoffReason??null,actions:Array.isArray(payload.actions)?payload.actions:[],voiceReply})
   }catch(error){return send(origin,{success:false,error:'widget_chat_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
