@@ -150,7 +150,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
       <div className="section-heading">
         <div>
           <h2>{tr('مزود الذكاء الاصطناعي', 'AI Provider')}</h2>
-          <p>{tr('Gemini يبقى الافتراضي، ويمكن تجهيز OpenRouter واختباره ثم تفعيله دون كشف المفاتيح للمتصفح.', 'Gemini remains the default; OpenRouter can be configured, tested, then activated without exposing secrets to the browser.')}</p>
+          <p>{tr('يمكن تجهيز أي مزود واختباره بأمان، ولا يتغير المزود الافتراضي إلا بعد نجاح الاختبار والتفعيل الصريح.', 'Providers can be configured and tested safely; the default changes only after a successful test and explicit activation.')}</p>
         </div>
         {providers.find(item => item.is_default) && <span className="status-badge success">{tr('الافتراضي', 'Default')}: {providerLabel(providers.find(item => item.is_default)!.provider)}</span>}
       </div>
