@@ -1,1 +1,0 @@
-Voice transcript contrast refinement is intentionally isolated in voice-contrast.css so the visual hotfix remains small and easy to maintain.
