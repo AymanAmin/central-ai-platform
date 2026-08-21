@@ -1,0 +1,59 @@
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
+import { createAdminClient } from '../_shared/runtime.ts'
+
+type JsonObject=Record<string,unknown>
+interface Body{
+  visitorId?:string
+  conversationId?:string
+  messageId?:string
+  text?:string
+  language?:string
+  customer?:{name?:string;email?:string;phone?:string}
+}
+
+const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
+const originHeaders=(origin:string)=>({
+  'content-type':'application/json; charset=utf-8',
+  'access-control-allow-origin':origin||'null',
+  'access-control-allow-methods':'POST,OPTIONS',
+  'access-control-allow-headers':'content-type,x-widget-key',
+  'access-control-max-age':'600',
+  'vary':'Origin',
+  'cache-control':'no-store',
+})
+const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:originHeaders(origin)})
+
+Deno.serve(async(req:Request)=>{
+  const origin=req.headers.get('origin')??''
+  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:originHeaders(origin)})
+  if(req.method!=='POST')return send(origin,{success:false,error:'method_not_allowed'},405)
+  const publicKey=clean(req.headers.get('x-widget-key')??undefined,160)
+  if(!/^ai_widget_[A-Za-z0-9_-]{24,}$/.test(publicKey))return send(origin,{success:false,error:'invalid_widget_key'},401)
+  if(!origin)return send(origin,{success:false,error:'widget_origin_required'},403)
+  const admin=createAdminClient()
+  try{
+    const widgetResult=await admin.from('web_chat_widgets').select('id,organization_id,api_client_id,prompt_profile_id,knowledge_base_id,allowed_origins,is_active').eq('public_key',publicKey).maybeSingle()
+    const widget=widgetResult.data
+    if(widgetResult.error||!widget?.is_active)return send(origin,{success:false,error:'widget_not_found'},404)
+    const allowed=Array.isArray(widget.allowed_origins)?widget.allowed_origins.filter((value):value is string=>typeof value==='string'):[]
+    if(!allowed.includes(origin))return send(origin,{success:false,error:'widget_origin_not_allowed'},403)
+    const body=await req.json() as Body
+    const visitorId=clean(body.visitorId,160),conversationId=clean(body.conversationId,160),messageId=clean(body.messageId,160),text=clean(body.text,4000)
+    if(!visitorId||!conversationId||!messageId||!text)return send(origin,{success:false,error:'invalid_request'},400)
+    const secret=await admin.rpc('get_web_widget_api_key',{p_widget_id:widget.id})
+    if(secret.error||typeof secret.data!=='string'||!secret.data.startsWith('ai_live_'))return send(origin,{success:false,error:'widget_backend_unavailable'},503)
+    const customer={externalId:`web:${widget.id}:${visitorId}`,name:clean(body.customer?.name,160)||undefined,email:clean(body.customer?.email,240)||null,phone:clean(body.customer?.phone,80)||undefined,language:body.language==='en'?'en':'ar',metadata:{widgetId:widget.id,sourceOrigin:origin}}
+    const context:JsonObject={widgetId:widget.id,sourceOrigin:origin,webWidget:true}
+    if(widget.prompt_profile_id)context.promptProfileId=widget.prompt_profile_id
+    if(widget.knowledge_base_id)context.knowledgeBaseId=widget.knowledge_base_id
+    const chatResponse=await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/chat`,{
+      method:'POST',
+      headers:{authorization:`Bearer ${secret.data}`,'content-type':'application/json'},
+      body:JSON.stringify({channel:'web_widget',customer,conversation:{externalId:`web:${widget.id}:${conversationId}`,metadata:{widgetId:widget.id,sourceOrigin:origin}},message:{externalId:`web:${widget.id}:${messageId}`,type:'text',text},context}),
+      signal:AbortSignal.timeout(45000),
+    })
+    const payload=await chatResponse.json() as JsonObject
+    if(!chatResponse.ok)return send(origin,{success:false,error:typeof payload.error==='string'?payload.error:'chat_failed'},chatResponse.status)
+    return send(origin,{success:true,conversationId:payload.conversationId??null,status:payload.status??'completed',answer:payload.answer??'',language:payload.language??customer.language,intent:payload.intent??null,confidence:payload.confidence??null,requiresHuman:payload.requiresHuman??false,humanHandoffReason:payload.humanHandoffReason??null,actions:Array.isArray(payload.actions)?payload.actions:[]})
+  }catch(error){return send(origin,{success:false,error:'widget_chat_failed',detail:error instanceof Error?error.message:undefined},500)}
+})
