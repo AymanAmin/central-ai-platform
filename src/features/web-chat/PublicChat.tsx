@@ -1,4 +1,5 @@
 import { useEffect,useMemo,useRef,useState } from 'react'
+import { VoiceNotePlayer } from '../../components/VoiceNotePlayer'
 import { loadWidgetConfig,loadWidgetDirectory,sendWidgetMessage,sendWidgetVoice,syncWidgetConversation,widgetSession,type WidgetAudio,type WidgetDirectoryItem,type WidgetHistoryMessage,type WidgetPublicConfig,type WidgetSession } from './chatClient'
 
 type Lang='ar'|'en'
@@ -65,7 +66,8 @@ export function PublicChat(){
     return()=>{cancelled=true}
   },[selectedKey])
 
-  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth',block:'end'})},[messages,busy])
+  const newestMessageId=messages[messages.length-1]?.id??''
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth',block:'end'})},[newestMessageId,busy])
   useEffect(()=>{
     if(!started||!config||!session)return
     let stopped=false
@@ -178,7 +180,18 @@ export function PublicChat(){
     {started&&config&&<main className="public-chat-shell" style={{'--chat-accent':config.primaryColor} as React.CSSProperties}>
       <header className="public-chat-header"><div className="public-chat-agent"><span className="public-chat-agent-avatar">✦</span><div><strong>{title}</strong><small><i/>{humanTakeover?label(language,'موظف الدعم يتابع المحادثة','A support agent is handling this chat'):orgName+' · '+label(language,'متصل','Online')}</small></div></div><div className="public-chat-head-actions"><button onClick={()=>setLanguage(current=>current==='ar'?'en':'ar')} aria-label={label(language,'تغيير اللغة','Change language')}>{language==='ar'?'EN':'AR'}</button><button onClick={newChat} aria-label={label(language,'محادثة جديدة','New chat')}>↻</button></div></header>
       <div className="public-chat-context"><span>{humanTakeover?label(language,'دعم بشري','HUMAN SUPPORT'):label(language,'اختبار مباشر','LIVE TEST')}</span><p>{label(language,'الرسائل الجديدة تظهر تلقائيًا دون إعادة تحميل الصفحة.','New messages appear automatically without reloading the page.')}</p></div>
-      <section className="public-chat-messages" aria-live="polite">{messages.map(item=><article key={item.id} className={`public-chat-message ${item.role}`}><div>{item.text}</div>{item.voiceInput&&<small className="voice-origin-label">🎙 {label(language,'النص مُفرّغ من رسالة صوتية','Text transcribed from a voice message')}</small>}{item.audio?.source==='assistant_tts'&&<small className="voice-origin-label">🔊 {label(language,'رد صوتي','Voice reply')}{item.audio.voiceName?` · ${item.audio.voiceName}`:''}</small>}{item.audio?.url&&<audio className="message-audio-player" controls preload="metadata" src={item.audio.url}/>} {item.source==='human'&&<small>{item.agentName?`${label(language,'الموظف','Agent')}: ${item.agentName}`:label(language,'رد موظف الدعم','Support agent reply')}</small>}{item.actions?.length?<div className="public-chat-message-actions">{item.actions.map((entry,index)=>typeof entry.label==='string'?<button key={`${item.id}-${index}`} onClick={()=>action(entry)}>{entry.label}</button>:null)}</div>:null}</article>)}{messages.length===1&&suggestions.length>0&&<div className="public-chat-suggestions">{suggestions.map(suggestion=><button key={suggestion} onClick={()=>void send(suggestion)}>{suggestion}</button>)}</div>}{busy&&<div className="public-chat-typing" aria-label={label(language,'جارٍ إرسال الرسالة','Sending message')}><span/><span/><span/></div>}{error&&<div className="public-chat-error" role="alert">{error}</div>}<div ref={endRef}/></section>
+      <section className="public-chat-messages" aria-live="polite">{messages.map(item=>{
+        const assistantVoice=item.role==='assistant'&&item.audio?.source==='assistant_tts'&&Boolean(item.audio.url)
+        return <article key={item.id} className={`public-chat-message ${item.role}${assistantVoice?' has-voice-reply':''}`}>
+          {assistantVoice?<VoiceNotePlayer src={item.audio?.url} durationMs={item.audio?.durationMs} title={label(language,'رد صوتي','Voice reply')} voiceName={item.audio?.voiceName} fallbackText={item.text} locale={language}/>:<>
+            <div>{item.text}</div>
+            {item.voiceInput&&<small className="voice-origin-label">🎙 {label(language,'النص مُفرّغ من رسالة صوتية','Text transcribed from a voice message')}</small>}
+            {item.audio?.url&&<VoiceNotePlayer src={item.audio.url} durationMs={item.audio.durationMs} title={item.audio.source==='customer_voice'?label(language,'رسالة صوتية','Voice message'):label(language,'رد صوتي','Voice reply')} voiceName={item.audio.voiceName} locale={language}/>} 
+          </>}
+          {item.source==='human'&&<small>{item.agentName?`${label(language,'الموظف','Agent')}: ${item.agentName}`:label(language,'رد موظف الدعم','Support agent reply')}</small>}
+          {item.actions?.length?<div className="public-chat-message-actions">{item.actions.map((entry,index)=>typeof entry.label==='string'?<button key={`${item.id}-${index}`} onClick={()=>action(entry)}>{entry.label}</button>:null)}</div>:null}
+        </article>
+      })}{messages.length===1&&suggestions.length>0&&<div className="public-chat-suggestions">{suggestions.map(suggestion=><button key={suggestion} onClick={()=>void send(suggestion)}>{suggestion}</button>)}</div>}{busy&&<div className="public-chat-typing" aria-label={label(language,'جارٍ إرسال الرسالة','Sending message')}><span/><span/><span/></div>}{error&&<div className="public-chat-error" role="alert">{error}</div>}<div ref={endRef}/></section>
       <form className={`public-chat-composer${config.voiceEnabled?' voice-enabled':''}${recording?' is-recording':''}`} onSubmit={event=>{event.preventDefault();void send()}}>
         {config.voiceEnabled&&<button type="button" className={`public-chat-mic${recording?' active':''}`} disabled={busy&&!recording} onClick={()=>recording?finishRecording():void startRecording()} aria-label={recording?label(language,'إيقاف وإرسال التسجيل','Stop and send recording'):label(language,'تسجيل رسالة صوتية','Record a voice message')}>🎙</button>}
         {recording?<div className="public-chat-recording"><span className="public-chat-record-dot"/><div><strong>{clock(recordingMs)}</strong><small>{label(language,'اضغط الميكروفون للإرسال','Tap the microphone to send')}</small></div><button type="button" onClick={cancelRecording} aria-label={label(language,'إلغاء التسجيل','Cancel recording')}>×</button></div>:<textarea rows={1} value={text} onChange={event=>setText(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();void send()}}} placeholder={placeholder} disabled={busy}/>}<button className="public-chat-send" disabled={busy||recording||!text.trim()} aria-label={label(language,'إرسال','Send')}>↑</button>
