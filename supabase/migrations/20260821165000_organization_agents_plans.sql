@@ -127,6 +127,43 @@ create trigger organizations_create_default_agent
 after insert on public.organizations
 for each row execute function public.create_default_organization_agent();
 
+create or replace function public.reindex_knowledge_on_agent_embedding_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.embedding_provider is distinct from old.embedding_provider
+     or new.embedding_model is distinct from old.embedding_model then
+    update public.knowledge_documents
+    set processing_status = 'pending', processing_error = null
+    where organization_id = new.organization_id and is_active = true;
+
+    insert into public.background_jobs (organization_id, job_type, payload, priority)
+    select d.organization_id, 'process_document', jsonb_build_object('documentId', d.id), 100
+    from public.knowledge_documents d
+    where d.organization_id = new.organization_id
+      and d.is_active = true
+      and not exists (
+        select 1
+        from public.background_jobs j
+        where j.organization_id = d.organization_id
+          and j.job_type = 'process_document'
+          and j.status in ('pending', 'running')
+          and j.payload @> jsonb_build_object('documentId', d.id)
+      );
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.reindex_knowledge_on_agent_embedding_change() from public, anon, authenticated;
+
+create trigger organization_agents_reindex_knowledge
+after update of embedding_provider, embedding_model on public.organization_agents
+for each row execute function public.reindex_knowledge_on_agent_embedding_change();
+
 create or replace view public.organization_agent_monthly_usage
 with (security_invoker = true)
 as
