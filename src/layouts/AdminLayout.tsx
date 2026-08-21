@@ -26,6 +26,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
         {key:'users',label:tr('المستخدمون','Users')},
         {key:'api-clients',label:tr('عملاء واجهة API','API Clients')},
         {key:'integration',label:tr('دليل الربط','Integration Guide')},
+        {key:'web-widgets',label:tr('ودجت الدردشة','Chat Widgets')},
       ],
     },
     {
@@ -43,6 +44,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       items:[
         {key:'customers',label:tr('العملاء','Customers')},
         {key:'conversations',label:tr('المحادثات','Conversations')},
+        {key:'chat-test',label:tr('اختبار الدردشة الخارجية','External Chat Test')},
         {key:'handoff',label:tr('التحويل البشري','Human Handoff')},
       ],
     },
