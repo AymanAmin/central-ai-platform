@@ -79,7 +79,7 @@ set search_path=''
 as $$
 begin
   if p_ref is not null and p_ref like 'vault:%' then
-    perform vault.delete_secret(substring(p_ref from 7)::uuid);
+    delete from vault.secrets where id=substring(p_ref from 7)::uuid;
   end if;
 end;
 $$;
