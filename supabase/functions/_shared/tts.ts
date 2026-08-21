@@ -134,7 +134,8 @@ export async function generateSpeech(admin: SupabaseClient, settings: VoiceSetti
   const bytes = pcm16ToWav(pcm)
   if (bytes.length > 8 * 1024 * 1024) throw new Error('tts_audio_too_large')
   const inputTokens = Number(payload.usageMetadata?.promptTokenCount ?? 0)
-  const outputTokens = Number(payload.usageMetadata?.candidatesTokenCount ?? Math.ceil(durationMs / 1000 * 25))
+  const reportedOutputTokens = Number(payload.usageMetadata?.candidatesTokenCount ?? 0)
+  const outputTokens = reportedOutputTokens > 0 ? reportedOutputTokens : Math.ceil(durationMs / 1000 * 25)
   const estimatedCost = await estimateCost(admin, model, inputTokens, outputTokens)
   return { bytes, mimeType: 'audio/wav', durationMs, provider: 'gemini', model, voiceName, inputTokens, outputTokens, estimatedCost, latencyMs: Math.round(performance.now() - started) }
 }
