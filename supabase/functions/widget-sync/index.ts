@@ -27,13 +27,21 @@ Deno.serve(async(req:Request)=>{
 
     const customerResult=await admin.from('customers').select('id').eq('organization_id',widget.organization_id).eq('external_customer_id',`web:${widget.id}:${visitorId}`).maybeSingle()
     if(customerResult.error)return send(origin,{success:false,error:'customer_lookup_failed'},500)
-    if(!customerResult.data)return send(origin,{success:true,exists:false,status:'new',humanTakeover:false,messages:[]})
+    if(!customerResult.data)return send(origin,{success:true,exists:false,conversationId,status:'new',humanTakeover:false,messages:[]})
 
-    const conversationResult=await admin.from('conversations').select('id,status,human_takeover,assigned_user_id').eq('organization_id',widget.organization_id).eq('customer_id',customerResult.data.id).eq('external_conversation_id',`web:${widget.id}:${conversationId}`).maybeSingle()
-    if(conversationResult.error)return send(origin,{success:false,error:'conversation_lookup_failed'},500)
-    const conversation=conversationResult.data
-    if(!conversation)return send(origin,{success:true,exists:false,status:'new',humanTakeover:false,messages:[]})
+    const selectConversation='id,status,human_takeover,assigned_user_id,external_conversation_id'
+    const exact=await admin.from('conversations').select(selectConversation).eq('organization_id',widget.organization_id).eq('customer_id',customerResult.data.id).eq('external_conversation_id',`web:${widget.id}:${conversationId}`).maybeSingle()
+    if(exact.error)return send(origin,{success:false,error:'conversation_lookup_failed'},500)
+    let conversation=exact.data
+    if(!conversation){
+      const latest=await admin.from('conversations').select(selectConversation).eq('organization_id',widget.organization_id).eq('customer_id',customerResult.data.id).order('last_message_at',{ascending:false}).limit(1).maybeSingle()
+      if(latest.error)return send(origin,{success:false,error:'conversation_lookup_failed'},500)
+      conversation=latest.data
+    }
+    if(!conversation)return send(origin,{success:true,exists:false,conversationId,status:'new',humanTakeover:false,messages:[]})
 
+    const prefix=`web:${widget.id}:`
+    const resumedConversationId=conversation.external_conversation_id.startsWith(prefix)?conversation.external_conversation_id.slice(prefix.length):conversationId
     const messageResult=await admin.from('messages').select('id,role,direction,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant']).order('created_at',{ascending:true}).limit(200)
     if(messageResult.error)return send(origin,{success:false,error:'message_lookup_failed'},500)
     const messages=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0).map(row=>{
@@ -41,6 +49,6 @@ Deno.serve(async(req:Request)=>{
       const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
       return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[]}
     })
-    return send(origin,{success:true,exists:true,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
+    return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
