@@ -6,12 +6,16 @@ import { Badge, Card, Empty, Modal, PageHeader, PanelHeader } from '../../compon
 import type { Conversation, Customer, Profile } from '../../types/domain'
 import { useI18n } from '../../lib/i18n'
 
-interface Message{id:string;role:string;direction:string;content:string|null;content_json:Record<string,unknown>|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string}
+type MessageMedia={kind:'audio'|'tts';stored:boolean;audioUrl:string|null;durationMs:number|null;voiceName:string|null;language:'ar'|'en'|null}
+interface Message{id:string;role:string;direction:string;content:string|null;content_json:Record<string,unknown>|null;intent:string|null;confidence:number|null;requires_human:boolean;created_at:string;media?:MessageMedia|null}
+type AttachmentRow={message_id:string;kind:'audio'|'tts';bucket:string|null;storage_path:string|null;original_audio_stored:boolean;duration_ms:number|null;voice_name:string|null;language:string|null}
 type HandoffReason='customer_requested'|'low_confidence'|'complaint'|'payment_issue'|'sensitive_request'|'tool_failed'|'manual'|'policy'
 
 const conversationTargetKey='central-ai:selected-conversation'
 const customerFilterKey='central-ai:customer-filter'
 const reasons:HandoffReason[]=['manual','customer_requested','low_confidence','complaint','payment_issue','sensitive_request','tool_failed','policy']
+const asObject=(value:unknown)=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{}
+const cleanLegacyVoiceLabel=(text:string)=>text.replace(/^🎙\s*(?:مُفرّغ من رسالة صوتية:|Transcribed from voice message:)\s*/i,'')
 
 export function Conversations({profile}:{profile:Profile}){
   const {tr,formatDate,valueLabel}=useI18n()
@@ -43,7 +47,20 @@ export function Conversations({profile}:{profile:Profile}){
   }
   const loadMessages=async(conversationId:string)=>{
     const result=await supabase.from('messages').select('id,role,direction,content,content_json,intent,confidence,requires_human,created_at').eq('conversation_id',conversationId).order('created_at')
-    setMessages((result.data??[]) as Message[])
+    const raw=(result.data??[]) as Message[]
+    if(result.error||raw.length===0){setMessages(raw);return}
+    const attachmentResult=await supabase.from('message_attachments').select('message_id,kind,bucket,storage_path,original_audio_stored,duration_ms,voice_name,language').eq('conversation_id',conversationId).in('message_id',raw.map(row=>row.id))
+    if(attachmentResult.error){setMessages(raw);return}
+    const mediaByMessage=new Map<string,MessageMedia>()
+    await Promise.all(((attachmentResult.data??[]) as AttachmentRow[]).map(async attachment=>{
+      let audioUrl:string|null=null
+      if(attachment.original_audio_stored&&attachment.bucket&&attachment.storage_path){
+        const signed=await supabase.storage.from(attachment.bucket).createSignedUrl(attachment.storage_path,900)
+        if(!signed.error)audioUrl=signed.data.signedUrl
+      }
+      mediaByMessage.set(attachment.message_id,{kind:attachment.kind,stored:Boolean(attachment.original_audio_stored),audioUrl,durationMs:attachment.duration_ms,voiceName:attachment.voice_name,language:attachment.language==='en'?'en':attachment.language==='ar'?'ar':null})
+    }))
+    setMessages(raw.map(row=>({...row,media:mediaByMessage.get(row.id)??null})))
   }
 
   useEffect(()=>{void load()},[customerFilter])
@@ -118,7 +135,12 @@ export function Conversations({profile}:{profile:Profile}){
 
           <Card className="support-customer-card"><PanelHeader title={tr('العميل','Customer')} description={tr('بيانات العميل المرتبط بهذه المحادثة.','Customer details linked to this conversation.')}/>{customer?<div className="support-customer-grid"><div><small>{tr('الاسم','Name')}</small><strong>{customer.display_name??'—'}</strong></div><div><small>{tr('المعرف الخارجي','External ID')}</small><code>{customer.external_customer_id}</code></div><div><small>{tr('الهاتف','Phone')}</small><span dir="ltr">{customer.phone??'—'}</span></div><div><small>{tr('البريد','Email')}</small><span dir="ltr">{customer.email??'—'}</span></div></div>:<Empty>{tr('تعذر تحميل بيانات العميل.','Customer details are unavailable.')}</Empty>}</Card>
 
-          <Card className="support-timeline-card"><PanelHeader title={tr('الخط الزمني','Timeline')} description={tr('تظهر رسائل العميل وردود AI والموظف تلقائيًا.','Customer, AI, and human-agent messages appear automatically.')}/>{messages.length===0?<Empty>{tr('لا توجد رسائل في هذه المحادثة.','No messages in this conversation.')}</Empty>:<div className="timeline">{messages.map(item=>{const human=item.content_json?.source==='human';return <div key={item.id} className={`bubble ${item.role}${human?' human-message':''}`}><div>{item.content}</div><small>{human?`${tr('موظف الدعم','Support agent')}${typeof item.content_json?.agentName==='string'?`: ${item.content_json.agentName}`:''}`:`${tr('النية','Intent')}: ${valueLabel(item.intent)} · ${tr('الثقة','Confidence')}: ${item.confidence??'—'}`} · {formatDate(item.created_at)} {item.requires_human?`· ${tr('يتطلب موظفًا','Human required')}`:''}</small></div>})}</div>}</Card>
+          <Card className="support-timeline-card"><PanelHeader title={tr('الخط الزمني','Timeline')} description={tr('تظهر رسائل العميل وردود AI والموظف تلقائيًا، مع توضيح مصدر الرسائل الصوتية.','Customer, AI, and human messages appear automatically, including voice provenance.')}/>{messages.length===0?<Empty>{tr('لا توجد رسائل في هذه المحادثة.','No messages in this conversation.')}</Empty>:<div className="timeline">{messages.map(item=>{const human=item.content_json?.source==='human',context=asObject(item.content_json?.context),voiceContext=asObject(context.voice),voiceDerived=item.role==='user'&&(item.media?.kind==='audio'||Object.keys(voiceContext).length>0||Boolean(item.content?.startsWith('🎙 '))),displayContent=voiceDerived&&item.content?cleanLegacyVoiceLabel(item.content):item.content;return <div key={item.id} className={`bubble ${item.role}${human?' human-message':''}`}>
+            {(voiceDerived||item.media?.kind==='tts')&&<div className="support-voice-meta">{voiceDerived&&<span className="support-voice-chip">🎙 {tr('مُفرّغ من رسالة صوتية','Transcribed from voice')}</span>}{voiceDerived&&item.media&&<span className={`support-voice-chip${item.media.stored?'':' muted'}`}>{item.media.stored?tr('التسجيل الأصلي محفوظ','Original audio retained'):tr('التسجيل الأصلي غير محفوظ','Original audio not retained')}</span>}{item.media?.kind==='tts'&&<span className="support-voice-chip">🔊 {tr('رد صوتي مولّد','Generated voice reply')}</span>}{item.media?.kind==='tts'&&item.media.language==='ar'&&<span className="support-voice-chip">{tr('إلقاء سعودي','Saudi Arabic delivery')}</span>}</div>}
+            <div>{displayContent}</div>
+            {item.media?.audioUrl&&<div className="support-audio-card"><div><strong>{item.media.kind==='tts'?tr('الرد الصوتي','Voice reply'):tr('التسجيل الأصلي','Original recording')}</strong>{item.media.voiceName&&<small>{item.media.voiceName}</small>}{item.media.durationMs&&<small>{Math.round(item.media.durationMs/1000)}s</small>}</div><audio controls preload="none" src={item.media.audioUrl}/></div>}
+            <small>{human?`${tr('موظف الدعم','Support agent')}${typeof item.content_json?.agentName==='string'?`: ${item.content_json.agentName}`:''}`:`${tr('النية','Intent')}: ${valueLabel(item.intent)} · ${tr('الثقة','Confidence')}: ${item.confidence??'—'}`} · {formatDate(item.created_at)} {item.requires_human?`· ${tr('يتطلب موظفًا','Human required')}`:''}</small>
+          </div>})}</div>}</Card>
 
           {selectedRow.human_takeover&&<Card className="support-reply-card"><PanelHeader title={tr('الرد على العميل','Reply to customer')} description={replyAllowed?tr('أنت تتحكم بالمحادثة. سيظهر ردك للعميل تلقائيًا.','You control this conversation. Your reply will appear to the customer automatically.'):waitingForClaim?tr('استلم المحادثة أولًا لتفعيل الرد.','Take over the conversation first to enable replies.'):tr('هذه المحادثة مسندة لموظف آخر.','This conversation is assigned to another agent.')}/>{replyAllowed?<form className="support-reply-form" onSubmit={e=>void sendReply(e)}><textarea rows={3} maxLength={4000} value={replyText} onChange={e=>setReplyText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void sendReply(e as unknown as React.FormEvent)}}} placeholder={tr('اكتب رد الموظف هنا…','Type the agent reply here…')} disabled={Boolean(busy)}/><div className="support-reply-actions"><span>{tr('Enter للإرسال · Shift+Enter لسطر جديد','Enter to send · Shift+Enter for a new line')}</span><button disabled={Boolean(busy)||!replyText.trim()}>{busy==='reply'?tr('جارٍ الإرسال…','Sending…'):tr('إرسال للعميل','Send to customer')}</button></div></form>:<div className="support-reply-disabled">{waitingForClaim&&<button disabled={Boolean(busy)} onClick={()=>void run('take_conversation',tr('تم استلام المحادثة ويمكنك الرد الآن.','Conversation claimed. You can reply now.'))}>{tr('استلام المحادثة وبدء الرد','Take over and start replying')}</button>}</div>}</Card>}
         </>}
