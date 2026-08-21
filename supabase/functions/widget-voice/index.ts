@@ -3,7 +3,9 @@ import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject = Record<string, unknown>
 const clean = (value: FormDataEntryValue | null, max: number) => typeof value === 'string' ? value.trim().slice(0, max) : ''
-const allowedAudio = new Set(['audio/webm','audio/ogg','audio/wav','audio/x-wav','audio/mpeg','audio/mp3','audio/aac','audio/flac','audio/mp4'])
+const mimeAliases: Record<string,string> = { 'audio/x-wav': 'audio/wav', 'audio/mp3': 'audio/mpeg' }
+const normalizeMime = (value: string) => { const base = value.toLowerCase().split(';', 1)[0]?.trim() ?? ''; return mimeAliases[base] ?? base }
+const allowedAudio = new Set(['audio/webm','audio/ogg','audio/wav','audio/mpeg','audio/aac','audio/flac','audio/mp4'])
 const originHeaders = (origin: string) => ({
   'content-type': 'application/json; charset=utf-8',
   'access-control-allow-origin': origin || 'null',
@@ -38,7 +40,8 @@ Deno.serve(async (req: Request) => {
     const audio = form.get('audio')
     if (!(audio instanceof File)) return send(origin, { success: false, error: 'audio_file_required' }, 400)
     if (audio.size <= 0 || audio.size > 8 * 1024 * 1024) return send(origin, { success: false, error: 'audio_file_too_large' }, 413)
-    if (!allowedAudio.has(audio.type.toLowerCase())) return send(origin, { success: false, error: 'unsupported_audio_type' }, 415)
+    const audioMime = normalizeMime(audio.type)
+    if (!allowedAudio.has(audioMime)) return send(origin, { success: false, error: 'unsupported_audio_type' }, 415)
     const visitorId = clean(form.get('visitorId'), 160)
     const conversationId = clean(form.get('conversationId'), 160)
     const messageId = clean(form.get('messageId'), 160)
@@ -52,7 +55,8 @@ Deno.serve(async (req: Request) => {
     if (widget.knowledge_base_id) context.knowledgeBaseId = widget.knowledge_base_id
 
     const upstream = new FormData()
-    upstream.set('audio', audio, audio.name || 'voice')
+    const normalizedAudio = audio.type.toLowerCase() === audioMime ? audio : new File([audio], audio.name || 'voice', { type: audioMime })
+    upstream.set('audio', normalizedAudio, normalizedAudio.name || 'voice')
     upstream.set('durationMs', clean(form.get('durationMs'), 12))
     upstream.set('channel', 'website')
     upstream.set('customerExternalId', `web:${widget.id}:${visitorId}`)
