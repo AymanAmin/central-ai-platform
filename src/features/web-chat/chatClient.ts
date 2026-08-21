@@ -26,6 +26,15 @@ export interface WidgetPublicConfig{
   maxVoiceSeconds:number
   organization:{nameAr:string;nameEn:string|null;defaultLanguage:string}
 }
+export interface WidgetAudio{
+  source?:'customer_voice'|'assistant_tts'|string
+  url?:string|null
+  mimeType?:string
+  durationMs?:number
+  stored?:boolean
+  voiceName?:string|null
+  language?:'ar'|'en'|string
+}
 export interface WidgetChatResponse{
   success:boolean
   conversationId:string|null
@@ -39,6 +48,7 @@ export interface WidgetChatResponse{
   actions:Array<Record<string,unknown>>
   transcript?:string
   voice?:{durationMs?:number;mimeType?:string}
+  voiceReply?:WidgetAudio|null
 }
 export interface WidgetHistoryMessage{
   id:string
@@ -48,6 +58,8 @@ export interface WidgetHistoryMessage{
   source:'ai'|'human'|'customer'
   agentName:string|null
   actions:Array<Record<string,unknown>>
+  voiceInput?:boolean
+  audio?:WidgetAudio|null
 }
 export interface WidgetSyncResponse{
   success:boolean
