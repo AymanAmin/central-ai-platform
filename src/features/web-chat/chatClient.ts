@@ -48,6 +48,7 @@ export interface WidgetHistoryMessage{
 export interface WidgetSyncResponse{
   success:boolean
   exists:boolean
+  conversationId:string
   status:string
   humanTakeover:boolean
   assignedUserId?:string|null
@@ -58,6 +59,7 @@ export interface WidgetSession{
   conversationId:string
   hasExistingConversation:boolean
   reset:()=>string
+  adopt:(conversationId:string)=>string
 }
 
 type ApiError={success?:boolean;error?:string;detail?:string}
@@ -88,12 +90,14 @@ export async function syncWidgetConversation(key:string,input:{visitorId:string;
 }
 
 const safeLocalStorage=()=>{try{return window.localStorage}catch{return null}}
+const safeSessionStorage=()=>{try{return window.sessionStorage}catch{return null}}
 export function widgetSession(key:string):WidgetSession{
-  const local=safeLocalStorage()
+  const local=safeLocalStorage(),legacy=safeSessionStorage()
   const visitorKey=`central-ai:${key}:visitor`,conversationKey=`central-ai:${key}:conversation`
   let visitorId=local?.getItem(visitorKey)??''
   if(!visitorId){visitorId=crypto.randomUUID();local?.setItem(visitorKey,visitorId)}
-  const storedConversation=local?.getItem(conversationKey)??''
+  let storedConversation=local?.getItem(conversationKey)??''
+  if(!storedConversation){storedConversation=legacy?.getItem(conversationKey)??'';if(storedConversation)local?.setItem(conversationKey,storedConversation)}
   let conversationId=storedConversation
   if(!conversationId){conversationId=crypto.randomUUID();local?.setItem(conversationKey,conversationId)}
   return{
@@ -101,5 +105,6 @@ export function widgetSession(key:string):WidgetSession{
     conversationId,
     hasExistingConversation:Boolean(storedConversation),
     reset:()=>{const next=crypto.randomUUID();local?.setItem(conversationKey,next);return next},
+    adopt:(next:string)=>{if(next)local?.setItem(conversationKey,next);return next},
   }
 }
