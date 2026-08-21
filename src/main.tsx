@@ -7,6 +7,7 @@ import './app/refinements.css'
 import './app/modals.css'
 import './app/admin-actions.css'
 import './app/web-chat.css'
+import './app/customer-chat-continuity.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><I18nProvider><App /></I18nProvider></StrictMode>,
