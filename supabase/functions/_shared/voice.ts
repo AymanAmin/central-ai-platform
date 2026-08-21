@@ -1,0 +1,174 @@
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.112.3'
+
+export type VoiceProvider = 'gemini' | 'openai' | 'groq'
+export interface VoiceSettings {
+  voice_enabled: boolean
+  voice_provider: VoiceProvider
+  voice_model: string
+  max_voice_seconds: number
+  included_monthly_voice_minutes: number | null
+}
+export interface VoiceTranscript {
+  text: string
+  provider: VoiceProvider
+  model: string
+  inputTokens: number
+  outputTokens: number
+  estimatedCost: number
+  latencyMs: number
+}
+
+const MAX_AUDIO_BYTES = 8 * 1024 * 1024
+const mimeAliases: Record<string, string> = {
+  'audio/x-wav': 'audio/wav',
+  'audio/mp3': 'audio/mpeg',
+}
+const allowedMimes = new Set([
+  'audio/webm', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp3', 'audio/aac', 'audio/flac', 'audio/mp4',
+])
+const extensionByMime: Record<string, string> = {
+  'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
+  'audio/aac': 'aac', 'audio/flac': 'flac', 'audio/mp4': 'm4a',
+}
+
+const monthStart = () => new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
+const cleanModel = (value: string) => value.trim().replace(/^models\//, '').slice(0, 180)
+const normalizeMime = (value: string) => mimeAliases[value.toLowerCase()] ?? value.toLowerCase()
+
+function base64(bytes: Uint8Array) {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length))
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+async function providerSecret(admin: SupabaseClient, provider: string) {
+  const setting = await admin.from('ai_provider_settings')
+    .select('id')
+    .is('organization_id', null)
+    .eq('provider', provider)
+    .eq('is_active', true)
+    .order('is_default', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (setting.error) throw setting.error
+  if (!setting.data) throw new Error(`voice_provider_not_configured:${provider}`)
+  const secret = await admin.rpc('get_ai_provider_secret', { p_provider_setting_id: setting.data.id })
+  if (secret.error) throw secret.error
+  if (typeof secret.data !== 'string' || !secret.data.trim()) throw new Error(`voice_provider_secret_missing:${provider}`)
+  return secret.data.trim()
+}
+
+async function estimateCost(admin: SupabaseClient, provider: string, model: string, inputTokens: number, outputTokens: number, durationMs: number) {
+  const price = await admin.from('model_pricing')
+    .select('input_cost_per_million,output_cost_per_million,audio_cost_per_minute')
+    .eq('provider', provider)
+    .eq('model', model)
+    .eq('is_active', true)
+    .lte('effective_from', new Date().toISOString().slice(0, 10))
+    .order('effective_from', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (price.error) throw price.error
+  const audioPerMinute = Number(price.data?.audio_cost_per_minute ?? 0)
+  if (audioPerMinute > 0) return (durationMs / 60000) * audioPerMinute
+  return inputTokens / 1_000_000 * Number(price.data?.input_cost_per_million ?? 0)
+    + outputTokens / 1_000_000 * Number(price.data?.output_cost_per_million ?? 0)
+}
+
+async function transcribeGemini(secret: string, model: string, bytes: Uint8Array, mimeType: string, language: 'ar' | 'en' | null) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel(model))}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': secret },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [
+        { text: `Transcribe this customer voice message accurately. Return transcript text only, with no commentary or markdown. Preserve names, numbers, URLs, and proper nouns. Language hint: ${language ?? 'auto'}.` },
+        { inlineData: { mimeType: normalizeMime(mimeType), data: base64(bytes) } },
+      ] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 2048 },
+    }),
+    signal: AbortSignal.timeout(45000),
+  })
+  const payload = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+    error?: { message?: string }
+  }
+  if (!response.ok) throw new Error(`voice_transcription_failed:${payload.error?.message ?? response.status}`)
+  const text = payload.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? ''
+  if (!text) throw new Error('voice_transcription_empty')
+  return { text, inputTokens: Number(payload.usageMetadata?.promptTokenCount ?? 0), outputTokens: Number(payload.usageMetadata?.candidatesTokenCount ?? 0) }
+}
+
+async function transcribeOpenAiCompatible(secret: string, provider: 'openai' | 'groq', model: string, bytes: Uint8Array, mimeType: string, language: 'ar' | 'en' | null) {
+  const form = new FormData()
+  form.set('file', new Blob([bytes], { type: normalizeMime(mimeType) }), `voice.${extensionByMime[mimeType] ?? extensionByMime[normalizeMime(mimeType)] ?? 'bin'}`)
+  form.set('model', cleanModel(model))
+  form.set('response_format', 'json')
+  if (language) form.set('language', language)
+  const endpoint = provider === 'groq' ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions'
+  const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${secret}` }, body: form, signal: AbortSignal.timeout(45000) })
+  const payload = await response.json() as { text?: string; error?: { message?: string }; usage?: { input_tokens?: number; output_tokens?: number } }
+  if (!response.ok) throw new Error(`voice_transcription_failed:${payload.error?.message ?? response.status}`)
+  const text = payload.text?.trim() ?? ''
+  if (!text) throw new Error('voice_transcription_empty')
+  return { text, inputTokens: Number(payload.usage?.input_tokens ?? 0), outputTokens: Number(payload.usage?.output_tokens ?? 0) }
+}
+
+export function assertAudioFile(file: File) {
+  const mimeType = file.type.toLowerCase()
+  if (!allowedMimes.has(mimeType)) throw new Error('unsupported_audio_type')
+  if (file.size <= 0 || file.size > MAX_AUDIO_BYTES) throw new Error('audio_file_too_large')
+  return { mimeType, extension: extensionByMime[mimeType] ?? 'bin' }
+}
+
+export async function resolveVoiceSettings(admin: SupabaseClient, organizationId: string): Promise<VoiceSettings> {
+  const result = await admin.from('organization_agents')
+    .select('voice_enabled,voice_provider,voice_model,max_voice_seconds,included_monthly_voice_minutes')
+    .eq('organization_id', organizationId)
+    .maybeSingle()
+  if (result.error) throw result.error
+  if (!result.data) return { voice_enabled: false, voice_provider: 'gemini', voice_model: 'gemini-2.5-flash-lite', max_voice_seconds: 120, included_monthly_voice_minutes: null }
+  return {
+    voice_enabled: Boolean(result.data.voice_enabled),
+    voice_provider: result.data.voice_provider as VoiceProvider,
+    voice_model: cleanModel(result.data.voice_model),
+    max_voice_seconds: Number(result.data.max_voice_seconds ?? 120),
+    included_monthly_voice_minutes: result.data.included_monthly_voice_minutes == null ? null : Number(result.data.included_monthly_voice_minutes),
+  }
+}
+
+export async function assertVoiceQuota(admin: SupabaseClient, organizationId: string, settings: VoiceSettings, durationMs: number) {
+  if (!settings.voice_enabled) throw new Error('voice_not_enabled')
+  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error('voice_duration_required')
+  if (durationMs > settings.max_voice_seconds * 1000) throw new Error('voice_duration_exceeded')
+  if (settings.included_monthly_voice_minutes == null) return
+  const rows = await admin.from('message_attachments').select('duration_ms').eq('organization_id', organizationId).eq('kind', 'audio').gte('created_at', monthStart())
+  if (rows.error) throw rows.error
+  const usedMs = (rows.data ?? []).reduce((sum, row) => sum + Number(row.duration_ms ?? 0), 0)
+  if (usedMs + durationMs > settings.included_monthly_voice_minutes * 60000) throw new Error('voice_monthly_limit_exceeded')
+}
+
+export async function transcribeAudio(admin: SupabaseClient, settings: VoiceSettings, file: File, durationMs: number, language: 'ar' | 'en' | null): Promise<VoiceTranscript> {
+  const { mimeType } = assertAudioFile(file)
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const secret = await providerSecret(admin, settings.voice_provider)
+  const started = performance.now()
+  const result = settings.voice_provider === 'gemini'
+    ? await transcribeGemini(secret, settings.voice_model, bytes, mimeType, language)
+    : await transcribeOpenAiCompatible(secret, settings.voice_provider, settings.voice_model, bytes, mimeType, language)
+  const estimatedCost = await estimateCost(admin, settings.voice_provider, settings.voice_model, result.inputTokens, result.outputTokens, durationMs)
+  return {
+    text: result.text,
+    provider: settings.voice_provider,
+    model: settings.voice_model,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    estimatedCost,
+    latencyMs: Math.round(performance.now() - started),
+  }
+}
