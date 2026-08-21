@@ -69,7 +69,7 @@ Deno.serve(async (req: Request) => {
     upstream.set('contextJson', JSON.stringify(context))
 
     const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/voice-message`, {
-      method: 'POST', headers: { authorization: `Bearer ${secret.data}` }, body: upstream, signal: AbortSignal.timeout(60000),
+      method: 'POST', headers: { authorization: `Bearer ${secret.data}` }, body: upstream, signal: AbortSignal.timeout(75000),
     })
     const payload = await response.json() as JsonObject
     return send(origin, payload, response.status)
