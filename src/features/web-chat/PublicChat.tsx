@@ -27,6 +27,10 @@ export function PublicChat(){
   const sync=async(widget:WidgetPublicConfig,current:WidgetSession)=>{
     const snapshot=await syncWidgetConversation(widget.key,{visitorId:current.visitorId,conversationId:current.conversationId})
     setHumanTakeover(snapshot.humanTakeover)
+    if(snapshot.conversationId&&snapshot.conversationId!==current.conversationId){
+      const adopted=current.adopt(snapshot.conversationId)
+      setSession({...current,conversationId:adopted,hasExistingConversation:true})
+    }
     if(snapshot.exists&&snapshot.messages.length){setMessages(fromHistory(snapshot.messages));return true}
     return false
   }
@@ -38,9 +42,7 @@ export function PublicChat(){
         if(cancelled)return
         setConfig(widget);setLanguage(widget.organization.defaultLanguage==='en'?'en':'ar')
         const current=widgetSession(widget.key);setSession(current)
-        if(current.hasExistingConversation){
-          try{const resumed=await sync(widget,current);if(!cancelled&&resumed)setStarted(true)}catch{/* A stale local conversation must not block a new chat. */}
-        }
+        try{const resumed=await sync(widget,current);if(!cancelled&&resumed)setStarted(true)}catch{/* A stale local conversation must not block a new chat. */}
       }).catch(err=>{if(!cancelled)setError(err instanceof Error?err.message:'widget_load_failed')})
       return()=>{cancelled=true}
     }
