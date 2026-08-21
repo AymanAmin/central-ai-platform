@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Badge, Card, Empty, FieldHint, Modal, PageHeader, PanelHeader, Spinner } from '../../components/Ui'
 import { adminApi } from '../../lib/adminApi'
 import { useI18n } from '../../lib/i18n'
+import { fetchProviderModelCatalog, type ProviderCatalogModel, type ProviderModelCatalog } from '../../lib/modelCatalog'
 import { supabase } from '../../lib/supabase'
 import type { Organization } from '../../types/domain'
 
@@ -32,6 +33,7 @@ type Agent = {
 }
 type Usage = { organization_id: string; customer_messages: number; total_tokens: number; estimated_cost_usd: number }
 type AgentTestResult = { chatLatencyMs: number; embeddingLatencyMs: number; fallbackLatencyMs: number | null; latencyMs: number }
+type ModelKind = 'chat' | 'embedding'
 
 const providers = ['gemini', 'openrouter', 'openai'] as const
 const providerLabel = (value: string) => value === 'gemini' ? 'Gemini' : value === 'openrouter' ? 'OpenRouter' : value === 'openai' ? 'OpenAI' : value
@@ -47,6 +49,9 @@ export function OrganizationAgents() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [usage, setUsage] = useState<Usage[]>([])
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([])
+  const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({})
+  const [catalogLoading, setCatalogLoading] = useState<Record<string, boolean>>({})
+  const [catalogErrors, setCatalogErrors] = useState<Record<string, string>>({})
   const [editing, setEditing] = useState<Agent | null>(null)
   const [initialRuntime, setInitialRuntime] = useState('')
   const [testedRuntime, setTestedRuntime] = useState('')
@@ -80,12 +85,59 @@ export function OrganizationAgents() {
   const activeAgents = agents.filter(agent => agent.is_active).length
   const monthCost = usage.reduce((sum, row) => sum + row.estimated_cost_usd, 0)
 
+  const loadCatalog = async (provider: string, force = false) => {
+    if (!provider) return null
+    if (!force && catalogs[provider]) return catalogs[provider]
+    if (catalogLoading[provider]) return null
+    setCatalogLoading(current => ({ ...current, [provider]: true }))
+    setCatalogErrors(current => ({ ...current, [provider]: '' }))
+    try {
+      const catalog = await fetchProviderModelCatalog(provider)
+      setCatalogs(current => ({ ...current, [provider]: catalog }))
+      return catalog
+    } catch (error) {
+      const value = error instanceof Error ? error.message : 'model_catalog_failed'
+      setCatalogErrors(current => ({ ...current, [provider]: value }))
+      return null
+    } finally {
+      setCatalogLoading(current => ({ ...current, [provider]: false }))
+    }
+  }
+
+  const modelOptions = (provider: string, kind: ModelKind, currentModel: string | null | undefined) => {
+    const catalog = catalogs[provider]
+    const rows = [...(kind === 'chat' ? (catalog?.chatModels ?? []) : (catalog?.embeddingModels ?? []))]
+    const configured = availableProvider(provider)
+    const defaultId = kind === 'chat' ? (catalog?.defaultChatModel ?? configured?.chat_model) : (catalog?.defaultEmbeddingModel ?? configured?.embedding_model)
+    for (const id of [currentModel?.trim(), defaultId?.trim()]) {
+      if (id && !rows.some(model => model.id === id)) rows.unshift({ id, name: id, free: false, contextLength: null, structured: kind === 'chat' })
+    }
+    const seen = new Set<string>()
+    return rows.filter(model => model.id && !seen.has(model.id) && seen.add(model.id))
+  }
+
+  const modelOptionLabel = (model: ProviderCatalogModel) => {
+    const prefix = model.free ? tr('مجاني · ', 'FREE · ') : ''
+    return `${prefix}${model.name}${model.name !== model.id ? ` — ${model.id}` : ''}`
+  }
+
+  const catalogHint = (provider: string, kind: ModelKind) => {
+    if (catalogLoading[provider]) return tr('جارٍ تحميل قائمة النماذج من المزود…', 'Loading the provider model list…')
+    if (catalogErrors[provider]) return tr('تعذر تحديث القائمة من المزود؛ يظهر النموذج المحفوظ حاليًا ويمكن إعادة فتح الشاشة للمحاولة مرة أخرى.', 'Could not refresh the provider catalog; the currently saved model remains available. Reopen the screen to retry.')
+    const catalog = catalogs[provider]
+    if (!catalog) return tr('تُحمّل النماذج المتاحة تلقائيًا حسب المزود.', 'Available models are loaded automatically for the selected provider.')
+    const count = kind === 'chat' ? catalog.chatModels.length : catalog.embeddingModels.length
+    return tr(`تم تحميل ${count} نموذجًا متاحًا من ${providerLabel(provider)}.`, `${count} available models loaded from ${providerLabel(provider)}.`)
+  }
+
   const openAgent = (agent: Agent) => {
     const copy = { ...agent }
     setEditing(copy)
     setInitialRuntime(runtimeSignature(copy))
     setTestedRuntime(agent.last_test_status === 'passed' ? runtimeSignature(copy) : '')
     setMessage('')
+    const selectedProviders = [copy.chat_provider, copy.embedding_provider, copy.fallback_provider].filter((value): value is string => Boolean(value))
+    void Promise.all([...new Set(selectedProviders)].map(provider => loadCatalog(provider)))
   }
 
   const patch = (values: Partial<Agent>) => setEditing(current => current ? { ...current, ...values } : current)
@@ -94,6 +146,7 @@ export function OrganizationAgents() {
     if (role === 'chat') patch({ chat_provider: provider, chat_model: known?.chat_model ?? '' })
     if (role === 'embedding') patch({ embedding_provider: provider, embedding_model: known?.embedding_model ?? '' })
     if (role === 'fallback') patch({ fallback_provider: provider || null, fallback_model: provider ? (known?.chat_model ?? '') : null })
+    if (provider) void loadCatalog(provider)
   }
 
   const testRuntime = async () => {
@@ -238,13 +291,43 @@ export function OrganizationAgents() {
         </section>
 
         <section className="agent-editor-section runtime-section">
-          <div className="agent-editor-heading"><span>02</span><div><h3>{tr('مسار الذكاء الاصطناعي', 'AI runtime route')}</h3><p>{tr('تغيير نموذج المحادثة لا يعيد بناء المعرفة. تغيير نموذج التضمين يعيد فهرسة معرفة الجهة تلقائيًا.', 'Changing chat does not rebuild knowledge. Changing embeddings automatically re-indexes this organization’s knowledge.')}</p></div></div>
+          <div className="agent-editor-heading"><span>02</span><div><h3>{tr('مسار الذكاء الاصطناعي', 'AI runtime route')}</h3><p>{tr('اختر النموذج من القائمة الخاصة بالمزود. تغيير نموذج المحادثة لا يعيد بناء المعرفة، بينما تغيير نموذج التضمين يعيد فهرسة معرفة الجهة تلقائيًا.', 'Choose models from the selected provider catalog. Changing chat does not rebuild knowledge, while changing embeddings automatically re-indexes this organization’s knowledge.')}</p></div></div>
           <div className="agent-runtime-grid">
-            <div className="runtime-column"><strong>{tr('المحادثة الأساسية', 'Primary chat')}</strong><label>{tr('المزود', 'Provider')}<select value={editing.chat_provider} onChange={event => applyProviderDefault('chat', event.target.value)}>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label><label>{tr('معرّف النموذج', 'Model ID')}<input required dir="ltr" value={editing.chat_model} onChange={event => patch({ chat_model: event.target.value })} placeholder="gemini-3.1-flash-lite" /></label></div>
-            <div className="runtime-column"><strong>{tr('قاعدة المعرفة', 'Knowledge embeddings')}</strong><label>{tr('المزود', 'Provider')}<select value={editing.embedding_provider} onChange={event => applyProviderDefault('embedding', event.target.value)}>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label><label>{tr('معرّف التضمين', 'Embedding model ID')}<input required dir="ltr" value={editing.embedding_model} onChange={event => patch({ embedding_model: event.target.value })} placeholder="gemini-embedding-001" /></label></div>
-            <div className="runtime-column"><strong>{tr('الاحتياط', 'Fallback')}</strong><label>{tr('المزود', 'Provider')}<select value={editing.fallback_provider ?? ''} onChange={event => applyProviderDefault('fallback', event.target.value)}><option value="">{tr('بدون احتياط', 'No fallback')}</option>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label><label>{tr('معرّف النموذج', 'Model ID')}<input dir="ltr" disabled={!editing.fallback_provider} value={editing.fallback_model ?? ''} onChange={event => patch({ fallback_model: event.target.value })} placeholder="gemini-3.1-flash-lite" /></label></div>
+            <div className="runtime-column">
+              <strong>{tr('المحادثة الأساسية', 'Primary chat')}</strong>
+              <label>{tr('المزود', 'Provider')}<select value={editing.chat_provider} onChange={event => applyProviderDefault('chat', event.target.value)}>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label>
+              <label>{tr('النموذج', 'Model')}
+                <select required dir="ltr" value={editing.chat_model} onChange={event => patch({ chat_model: event.target.value })}>
+                  <option value="" disabled>{tr('اختر نموذج المحادثة', 'Select chat model')}</option>
+                  {modelOptions(editing.chat_provider, 'chat', editing.chat_model).map(model => <option key={model.id} value={model.id}>{modelOptionLabel(model)}</option>)}
+                </select>
+                <FieldHint>{catalogHint(editing.chat_provider, 'chat')}</FieldHint>
+              </label>
+            </div>
+            <div className="runtime-column">
+              <strong>{tr('قاعدة المعرفة', 'Knowledge embeddings')}</strong>
+              <label>{tr('المزود', 'Provider')}<select value={editing.embedding_provider} onChange={event => applyProviderDefault('embedding', event.target.value)}>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label>
+              <label>{tr('نموذج التضمين', 'Embedding model')}
+                <select required dir="ltr" value={editing.embedding_model} onChange={event => patch({ embedding_model: event.target.value })}>
+                  <option value="" disabled>{tr('اختر نموذج التضمين', 'Select embedding model')}</option>
+                  {modelOptions(editing.embedding_provider, 'embedding', editing.embedding_model).map(model => <option key={model.id} value={model.id}>{modelOptionLabel(model)}</option>)}
+                </select>
+                <FieldHint>{catalogHint(editing.embedding_provider, 'embedding')}</FieldHint>
+              </label>
+            </div>
+            <div className="runtime-column">
+              <strong>{tr('الاحتياط', 'Fallback')}</strong>
+              <label>{tr('المزود', 'Provider')}<select value={editing.fallback_provider ?? ''} onChange={event => applyProviderDefault('fallback', event.target.value)}><option value="">{tr('بدون احتياط', 'No fallback')}</option>{providers.map(value => <option key={value} value={value}>{providerLabel(value)}</option>)}</select></label>
+              <label>{tr('النموذج الاحتياطي', 'Fallback model')}
+                <select dir="ltr" disabled={!editing.fallback_provider} value={editing.fallback_model ?? ''} onChange={event => patch({ fallback_model: event.target.value })}>
+                  <option value="">{editing.fallback_provider ? tr('اختر النموذج الاحتياطي', 'Select fallback model') : tr('اختر مزودًا أولًا', 'Select a provider first')}</option>
+                  {editing.fallback_provider && modelOptions(editing.fallback_provider, 'chat', editing.fallback_model).map(model => <option key={model.id} value={model.id}>{modelOptionLabel(model)}</option>)}
+                </select>
+                {editing.fallback_provider && <FieldHint>{catalogHint(editing.fallback_provider, 'chat')}</FieldHint>}
+              </label>
+            </div>
           </div>
-          <div className="agent-test-bar"><div><strong>{tr('اختبار عقد التشغيل الحقيقي', 'Test the real runtime contract')}</strong><small>{tr('يفحص Structured JSON + Embedding 1536 + Fallback قبل اعتماد التغيير.', 'Checks Structured JSON + 1536 embeddings + fallback before accepting model changes.')}</small></div><button type="button" className="ghost" disabled={busy} onClick={() => void testRuntime()}>{busy ? tr('جارٍ الاختبار…', 'Testing…') : tr('اختبار الوكيل', 'Test agent')}</button></div>
+          <div className="agent-test-bar"><div><strong>{tr('اختبار عقد التشغيل الحقيقي', 'Test the real runtime contract')}</strong><small>{tr('القائمة تقلل أخطاء كتابة المعرّفات، والاختبار النهائي يفحص Structured JSON + Embedding 1536 + Fallback قبل اعتماد التغيير.', 'The catalog prevents model-ID typos, and the final test checks Structured JSON + 1536 embeddings + fallback before accepting model changes.')}</small></div><button type="button" className="ghost" disabled={busy} onClick={() => void testRuntime()}>{busy ? tr('جارٍ الاختبار…', 'Testing…') : tr('اختبار الوكيل', 'Test agent')}</button></div>
         </section>
 
         <section className="agent-editor-section">
