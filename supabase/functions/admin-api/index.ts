@@ -1,7 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { getSupabaseSecretKey, json, preflight } from '../_shared/runtime.ts'
-import { createAiProvider } from '../_shared/ai.ts'
+import { createAiProvider } from '../_shared/ai-router.ts'
 import { globalProviderSettings, runtimeProvider } from '../_shared/agent-runtime.ts'
 
 type AdminAction =
@@ -65,7 +65,7 @@ const sha256 = async (value: string) => {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 const inviteRedirectUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
-const allowedProviders = new Set(['gemini', 'openrouter', 'openai'])
+const allowedProviders = new Set(['gemini', 'openrouter', 'openai', 'groq', 'cloudflare'])
 const cleanModel = (value: string | undefined) => value?.trim().slice(0, 180) ?? ''
 const validateProvider = (value: string | undefined) => !!value && allowedProviders.has(value)
 
@@ -197,19 +197,7 @@ Deno.serve(async (req: Request) => {
         fallbackLatencyMs = Math.round(performance.now() - fallbackStarted)
       }
 
-      return json({
-        success: true,
-        chatProvider,
-        chatModel,
-        chatLatencyMs,
-        embeddingProvider,
-        embeddingModel,
-        embeddingLatencyMs,
-        fallbackProvider,
-        fallbackModel,
-        fallbackLatencyMs,
-        latencyMs: Math.round(performance.now() - started),
-      })
+      return json({ success: true, chatProvider, chatModel, chatLatencyMs, embeddingProvider, embeddingModel, embeddingLatencyMs, fallbackProvider, fallbackModel, fallbackLatencyMs, latencyMs: Math.round(performance.now() - started) })
     }
 
     if (body.action === 'invite_user') {
