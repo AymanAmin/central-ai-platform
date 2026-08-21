@@ -31,10 +31,11 @@ Deno.serve(async(req:Request)=>{
     const [organization,prompt,agent]=await Promise.all([
       admin.from('organizations').select('name_ar,name_en,default_language,is_active').eq('id',widget.data.organization_id).single(),
       widget.data.prompt_profile_id?admin.from('prompt_profiles').select('name').eq('id',widget.data.prompt_profile_id).maybeSingle():Promise.resolve({data:null,error:null}),
-      admin.from('organization_agents').select('voice_enabled,max_voice_seconds').eq('organization_id',widget.data.organization_id).maybeSingle(),
+      admin.from('organization_agents').select('voice_enabled,max_voice_seconds,voice_reply_mode').eq('organization_id',widget.data.organization_id).maybeSingle(),
     ])
     if(organization.error||!organization.data?.is_active)return send({success:false,error:'organization_unavailable'},404)
     if(agent.error)throw agent.error
-    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,agentName:prompt.data?.name??null,voiceEnabled:Boolean(agent.data?.voice_enabled),maxVoiceSeconds:Number(agent.data?.max_voice_seconds??120),organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
+    const voiceReplyMode=agent.data?.voice_reply_mode==='always_voice'?'always_voice':agent.data?.voice_reply_mode==='voice_on_voice'?'voice_on_voice':'text_only'
+    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,agentName:prompt.data?.name??null,voiceEnabled:Boolean(agent.data?.voice_enabled),maxVoiceSeconds:Number(agent.data?.max_voice_seconds??120),voiceReplyMode,organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
   }catch(error){return send({success:false,error:'widget_config_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
