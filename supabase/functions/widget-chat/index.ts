@@ -49,7 +49,7 @@ Deno.serve(async(req:Request)=>{
     const chatResponse=await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/chat`,{
       method:'POST',
       headers:{authorization:`Bearer ${secret.data}`,'content-type':'application/json'},
-      body:JSON.stringify({channel:'web_widget',customer,conversation:{externalId:`web:${widget.id}:${conversationId}`,metadata:{widgetId:widget.id,sourceOrigin:origin}},message:{externalId:`web:${widget.id}:${messageId}`,type:'text',text},context}),
+      body:JSON.stringify({channel:'website',customer,conversation:{externalId:`web:${widget.id}:${conversationId}`,metadata:{widgetId:widget.id,sourceOrigin:origin}},message:{externalId:`web:${widget.id}:${messageId}`,type:'text',text},context}),
       signal:AbortSignal.timeout(45000),
     })
     const payload=await chatResponse.json() as JsonObject
