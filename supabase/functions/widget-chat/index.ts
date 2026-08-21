@@ -81,10 +81,10 @@ Deno.serve(async(req:Request)=>{
     if(!chatResponse.ok)return send(origin,{success:false,error:typeof payload.error==='string'?payload.error:'chat_failed'},chatResponse.status)
 
     let voiceReply:unknown=null
-    const voiceSettings=await admin.from('organization_agents').select('voice_reply_mode').eq('organization_id',widget.organization_id).maybeSingle()
-    if(!voiceSettings.error&&voiceSettings.data?.voice_reply_mode==='always_voice'){
+    const voiceSettings=await admin.from('organization_agents').select('voice_enabled,voice_reply_mode').eq('organization_id',widget.organization_id).maybeSingle()
+    if(!voiceSettings.error&&voiceSettings.data?.voice_enabled===true&&voiceSettings.data.voice_reply_mode==='always_voice'){
       try{
-        const ttsResponse=await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/tts-reply`,{method:'POST',headers:{authorization:`Bearer ${secret.data}`,'content-type':'application/json'},body:JSON.stringify({externalMessageId,source:'text'}),signal:AbortSignal.timeout(40000)})
+        const ttsResponse=await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/tts-reply`,{method:'POST',headers:{authorization:`Bearer ${secret.data}`,'content-type':'application/json'},body:JSON.stringify({externalMessageId}),signal:AbortSignal.timeout(40000)})
         const ttsPayload=await ttsResponse.json().catch(()=>null) as JsonObject|null
         if(ttsResponse.ok&&ttsPayload?.generated===true)voiceReply=ttsPayload.audio??null
       }catch{/* Text reply remains available if TTS is unavailable. */}
