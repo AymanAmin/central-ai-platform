@@ -23,6 +23,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
       label:tr('الإدارة والربط','Administration & API'),
       items:[
         {key:'organizations',label:tr('الجهات','Organizations')},
+        {key:'agents-plans',label:tr('وكلاء الجهات والباقات','Organization Agents & Plans')},
         {key:'users',label:tr('المستخدمون','Users')},
         {key:'api-clients',label:tr('عملاء واجهة API','API Clients')},
         {key:'integration',label:tr('دليل الربط','Integration Guide')},
@@ -127,7 +128,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
     <div className="workspace">
       <div className="workspace-bar">
         <div className="workspace-title"><span className="workspace-mark" aria-hidden="true"/>Central AI Platform</div>
-        <div className="workspace-model"><span>{tr('النموذج','Model')}</span><strong>Gemini Flash-Lite</strong></div>
+        <div className="workspace-model"><span>{tr('التشغيل','Runtime')}</span><strong>{profile.role==='SUPER_ADMIN'?tr('توجيه متعدد النماذج','Multi-model routing'):tr('وكيل الجهة','Organization agent')}</strong></div>
       </div>
       <main className="main">{children}</main>
     </div>
