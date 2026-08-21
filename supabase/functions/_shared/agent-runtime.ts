@@ -10,6 +10,8 @@ export interface OrganizationAgentRuntime {
   embedding_model: string
   fallback_provider: string | null
   fallback_model: string | null
+  included_monthly_messages: number | null
+  included_monthly_tokens: number | null
   monthly_ai_cost_limit_usd: number | null
   is_active: boolean
 }
@@ -27,6 +29,8 @@ const defaultRuntime = (organizationId: string, provider: RuntimeProvider): Orga
   embedding_model: provider.embedding_model,
   fallback_provider: provider.provider === 'gemini' ? null : 'gemini',
   fallback_model: provider.provider === 'gemini' ? null : 'gemini-3.1-flash-lite',
+  included_monthly_messages: null,
+  included_monthly_tokens: null,
   monthly_ai_cost_limit_usd: null,
   is_active: true,
 })
@@ -53,12 +57,14 @@ export async function globalProviderSettings(admin: SupabaseClient, provider?: s
 export async function resolveOrganizationAgent(admin: SupabaseClient, organizationId: string): Promise<OrganizationAgentRuntime> {
   const configured = await admin
     .from('organization_agents')
-    .select('organization_id,agent_name,chat_provider,chat_model,embedding_provider,embedding_model,fallback_provider,fallback_model,monthly_ai_cost_limit_usd,is_active')
+    .select('organization_id,agent_name,chat_provider,chat_model,embedding_provider,embedding_model,fallback_provider,fallback_model,included_monthly_messages,included_monthly_tokens,monthly_ai_cost_limit_usd,is_active')
     .eq('organization_id', organizationId)
     .maybeSingle()
   if (configured.error) throw configured.error
   if (configured.data?.is_active) return {
     ...configured.data,
+    included_monthly_messages: configured.data.included_monthly_messages == null ? null : Number(configured.data.included_monthly_messages),
+    included_monthly_tokens: configured.data.included_monthly_tokens == null ? null : Number(configured.data.included_monthly_tokens),
     monthly_ai_cost_limit_usd: configured.data.monthly_ai_cost_limit_usd == null ? null : Number(configured.data.monthly_ai_cost_limit_usd),
   } as OrganizationAgentRuntime
 
