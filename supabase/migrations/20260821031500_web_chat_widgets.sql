@@ -39,6 +39,23 @@ using(app_private.is_super_admin() or organization_id=app_private.current_user_o
 grant select on public.web_chat_widgets to authenticated;
 grant all on public.web_chat_widgets to service_role;
 
+create or replace function public.create_web_widget_api_key(p_widget_id uuid,p_secret text)
+returns text
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  v_id uuid;
+begin
+  if p_secret is null or p_secret not like 'ai_live_%' then raise exception 'invalid_widget_api_key'; end if;
+  v_id := vault.create_secret(p_secret,'web_widget_'||p_widget_id::text,'Central AI internal web widget API key');
+  return 'vault:'||v_id::text;
+end;
+$$;
+revoke all on function public.create_web_widget_api_key(uuid,text) from public,anon,authenticated;
+grant execute on function public.create_web_widget_api_key(uuid,text) to service_role;
+
 create or replace function public.get_web_widget_api_key(p_widget_id uuid)
 returns text
 language sql
@@ -53,6 +70,21 @@ as $$
 $$;
 revoke all on function public.get_web_widget_api_key(uuid) from public,anon,authenticated;
 grant execute on function public.get_web_widget_api_key(uuid) to service_role;
+
+create or replace function public.delete_web_widget_api_key(p_ref text)
+returns void
+language plpgsql
+security definer
+set search_path=''
+as $$
+begin
+  if p_ref is not null and p_ref like 'vault:%' then
+    perform vault.delete_secret(substring(p_ref from 7)::uuid);
+  end if;
+end;
+$$;
+revoke all on function public.delete_web_widget_api_key(text) from public,anon,authenticated;
+grant execute on function public.delete_web_widget_api_key(text) to service_role;
 
 comment on table public.web_chat_widgets is 'Public website chat widget configurations. Public keys are identifiers, never API secrets.';
 comment on column public.web_chat_widgets.api_key_vault_ref is 'Reference to the dedicated internal ai_live key stored in Supabase Vault.';
