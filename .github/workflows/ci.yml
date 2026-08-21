@@ -1,5 +1,6 @@
 name: CI and Deploy
 
+# Production Pages deployment is intentionally main-only.
 on:
   push:
     branches: [main]
