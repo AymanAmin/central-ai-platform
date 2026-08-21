@@ -47,12 +47,16 @@ alter table public.message_attachments
 
 create index if not exists message_attachments_org_source_created_idx
   on public.message_attachments(organization_id, audio_source, created_at desc);
+create unique index if not exists message_attachments_message_source_uidx
+  on public.message_attachments(message_id, audio_source);
 
 insert into public.model_pricing (
   provider, model, input_cost_per_million, output_cost_per_million,
   embedding_cost_per_million, audio_cost_per_minute, effective_from, is_active
 )
-values ('gemini','gemini-3.1-flash-tts-preview',1,20,0,0,current_date,true)
+values
+  ('gemini','gemini-3.1-flash-tts-preview',1,20,0,0,current_date,true),
+  ('gemini','gemini-2.5-flash-preview-tts',0.5,10,0,0,current_date,true)
 on conflict (provider, model, effective_from) do update set
   input_cost_per_million = excluded.input_cost_per_million,
   output_cost_per_million = excluded.output_cost_per_million,
