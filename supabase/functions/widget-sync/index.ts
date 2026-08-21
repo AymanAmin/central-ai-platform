@@ -66,7 +66,8 @@ Deno.serve(async(req:Request)=>{
     const messages=rows.map(row=>{
       const contentJson=asObject(row.content_json),context=asObject(contentJson.context),voiceContext=asObject(context.voice),source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai',media=mediaByMessage.get(row.id)
       const voiceDerived=row.role==='user'&&(Object.keys(voiceContext).length>0||media?.kind==='audio'||row.content.startsWith('🎙 '))
-      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceDerived,audioUrl:media?.audioUrl??null,audioKind:media?.kind??null,audioStored:media?.stored??false,audioDurationMs:media?.durationMs??null,voiceName:media?.voiceName??null}
+      const audioLanguage=media?.language==='en'?'en':media?.language==='ar'?'ar':null
+      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceDerived,audioUrl:media?.audioUrl??null,audioKind:media?.kind??null,audioStored:media?.stored??false,audioDurationMs:media?.durationMs??null,voiceName:media?.voiceName??null,audioLanguage}
     })
     return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
