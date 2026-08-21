@@ -131,7 +131,7 @@ Deno.serve(async (req: Request) => {
         existingResult = await findTtsAttachment(admin, client.organization_id, assistant.data.id)
         if (existingResult.error) throw existingResult.error
         existing = existingResult.data as ExistingAttachment | null
-        if (existing?.generation_provider !== PENDING_PROVIDER && existing) return replyAudio(existing, true)
+        if (existing && existing.generation_provider !== PENDING_PROVIDER) return replyAudio(existing, true)
         return json({ success: true, generated: false, reason: 'generation_in_progress' }, 202)
       }
       if (existing.storage_path) await admin.storage.from('chat-media').remove([existing.storage_path])
@@ -152,8 +152,8 @@ Deno.serve(async (req: Request) => {
         storage_path: storagePath,
         original_audio_stored: true,
         mime_type: 'audio/wav',
-        byte_size: 0,
-        duration_ms: 0,
+        byte_size: 1,
+        duration_ms: null,
         generation_provider: PENDING_PROVIDER,
         generation_model: settings.voice_tts_model,
         generation_voice: settings.voice_tts_voice,
@@ -169,7 +169,7 @@ Deno.serve(async (req: Request) => {
         const raced = await findTtsAttachment(admin, client.organization_id, assistant.data.id)
         if (raced.error) throw raced.error
         const current = raced.data as ExistingAttachment | null
-        if (current?.generation_provider !== PENDING_PROVIDER && current) return replyAudio(current, true)
+        if (current && current.generation_provider !== PENDING_PROVIDER) return replyAudio(current, true)
         return json({ success: true, generated: false, reason: 'generation_in_progress' }, 202)
       }
       throw reservation.error
