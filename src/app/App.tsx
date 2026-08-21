@@ -7,6 +7,7 @@ import { canAccessPage } from '../lib/permissions'
 import { Dashboard } from '../features/dashboard/Dashboard'
 import { SetupWizard } from '../features/setup/SetupWizard'
 import { Organizations } from '../features/organizations/Organizations'
+import { OrganizationAgents } from '../features/agents/OrganizationAgents'
 import { Users } from '../features/users/Users'
 import { ApiClients } from '../features/api-clients/ApiClients'
 import { IntegrationGuide } from '../features/api-clients/IntegrationGuide'
@@ -55,7 +56,7 @@ export function App(){
   const navigate=(p:string)=>{location.hash=p;setPage(p)}
   const finishInvite=()=>{setInviteFlow(false);history.replaceState(null,'',`${location.pathname}#dashboard`);setPage('dashboard')}
   const safePage=profile&&canAccessPage(profile.role,page)?page:'dashboard'
-  const view=useMemo(()=>{if(!profile)return null;switch(safePage){case'setup':return <SetupWizard profile={profile} onNavigate={navigate}/>;case'organizations':return <Organizations profile={profile}/>;case'users':return <Users profile={profile}/>;case'api-clients':return <ApiClients profile={profile}/>;case'integration':return <IntegrationGuide/>;case'web-widgets':return <WebWidgets profile={profile}/>;case'knowledge':return <Knowledge profile={profile}/>;case'playground':return <Playground profile={profile}/>;case'ai-settings':return <AiSettings profile={profile}/>;case'prompts':return <Prompts/>;case'tools':return <Tools/>;case'customers':return <Customers profile={profile}/>;case'conversations':return <Conversations profile={profile}/>;case'chat-test':return <ExternalChatTest profile={profile}/>;case'handoff':return <Handoff/>;case'usage':return <Usage/>;case'audit':return <Audit/>;default:return <Dashboard profile={profile}/>}},[safePage,profile])
+  const view=useMemo(()=>{if(!profile)return null;switch(safePage){case'setup':return <SetupWizard profile={profile} onNavigate={navigate}/>;case'organizations':return <Organizations profile={profile}/>;case'agents-plans':return <OrganizationAgents/>;case'users':return <Users profile={profile}/>;case'api-clients':return <ApiClients profile={profile}/>;case'integration':return <IntegrationGuide/>;case'web-widgets':return <WebWidgets profile={profile}/>;case'knowledge':return <Knowledge profile={profile}/>;case'playground':return <Playground profile={profile}/>;case'ai-settings':return <AiSettings profile={profile}/>;case'prompts':return <Prompts/>;case'tools':return <Tools/>;case'customers':return <Customers profile={profile}/>;case'conversations':return <Conversations profile={profile}/>;case'chat-test':return <ExternalChatTest profile={profile}/>;case'handoff':return <Handoff/>;case'usage':return <Usage/>;case'audit':return <Audit/>;default:return <Dashboard profile={profile}/>}},[safePage,profile])
   if(publicChat)return <PublicChat/>
   if(loading)return <div className="center-screen"><Spinner/></div>
   if(location.hash==='#reset-password')return <AuthScreen mode="reset-password" onDone={()=>navigate('dashboard')}/>
