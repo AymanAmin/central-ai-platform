@@ -17,7 +17,9 @@ export interface GeneratedSpeech {
 
 const MAX_TTS_SECONDS = 120
 const AZURE_TTS_MODEL = 'neural-tts'
+const AZURE_REALTIME_MODEL = 'gpt-realtime-mini'
 const AZURE_VOICES = new Set(['ar-SA-HamedNeural', 'ar-SA-ZariyahNeural'])
+const AZURE_REALTIME_VOICES = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'])
 const monthStart = () => new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
 const cleanModel = (value: string) => value.trim().replace(/^models\//, '').slice(0, 180)
 const cleanVoice = (value: string) => value.trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80) || 'Sulafat'
@@ -26,6 +28,17 @@ function decodeBase64(value: string) {
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function concatBytes(chunks: Uint8Array[]) {
+  const size = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
   return bytes
 }
 
@@ -107,11 +120,28 @@ function azureCredentials() {
   return { key, region }
 }
 
+function azureRealtimeCredentials() {
+  const key = Deno.env.get('AZURE_OPENAI_API_KEY')?.trim() ?? ''
+  const endpointRaw = Deno.env.get('AZURE_OPENAI_ENDPOINT')?.trim() ?? ''
+  const deployment = Deno.env.get('AZURE_OPENAI_DEPLOYMENT_NAME')?.trim() ?? ''
+  if (!key) throw new Error('tts_provider_secret_missing:azure_realtime')
+  if (!endpointRaw) throw new Error('tts_provider_endpoint_missing:azure_realtime')
+  if (!deployment) throw new Error('tts_provider_deployment_missing:azure_realtime')
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(deployment)) throw new Error('tts_provider_deployment_invalid:azure_realtime')
+
+  let endpoint: URL
+  try { endpoint = new URL(endpointRaw) } catch { throw new Error('tts_provider_endpoint_invalid:azure_realtime') }
+  const host = endpoint.hostname.toLowerCase()
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || (endpoint.pathname !== '/' && endpoint.pathname !== '')) throw new Error('tts_provider_endpoint_invalid:azure_realtime')
+  if (!host.endsWith('.openai.azure.com')) throw new Error('tts_provider_endpoint_invalid:azure_realtime')
+  return { key, endpoint: `https://${host}`, deployment }
+}
+
 async function estimateCost(admin: SupabaseClient, provider: VoiceTtsProvider, model: string, inputTokens: number, outputTokens: number, durationMs: number) {
   const price = await admin.from('model_pricing').select('input_cost_per_million,output_cost_per_million,audio_cost_per_minute').eq('provider', provider).eq('model', model).eq('is_active', true).lte('effective_from', new Date().toISOString().slice(0, 10)).order('effective_from', { ascending: false }).limit(1).maybeSingle()
   if (price.error) throw price.error
   const audioPerMinute = Number(price.data?.audio_cost_per_minute ?? 0)
-  if (provider === 'azure' && audioPerMinute > 0) return durationMs / 60000 * audioPerMinute
+  if ((provider === 'azure' || provider === 'azure_realtime') && audioPerMinute > 0) return durationMs / 60000 * audioPerMinute
   return inputTokens / 1_000_000 * Number(price.data?.input_cost_per_million ?? 0) + outputTokens / 1_000_000 * Number(price.data?.output_cost_per_million ?? 0)
 }
 
@@ -190,6 +220,116 @@ async function generateAzureSpeech(admin: SupabaseClient, settings: VoiceSetting
   return { bytes, mimeType: 'audio/wav', durationMs, provider: 'azure', model, voiceName, inputTokens: 0, outputTokens: 0, estimatedCost, latencyMs: Math.round(performance.now() - started) }
 }
 
+type RealtimeServerEvent = {
+  type?: string
+  delta?: string
+  error?: { message?: string; code?: string }
+  response?: { status?: string; status_details?: { error?: { message?: string } }; usage?: { input_tokens?: number; output_tokens?: number } }
+}
+
+async function generateAzureRealtimeSpeech(admin: SupabaseClient, settings: VoiceSettings, spoken: string, language: 'ar' | 'en'): Promise<GeneratedSpeech> {
+  const { key, endpoint, deployment } = azureRealtimeCredentials()
+  const model = AZURE_REALTIME_MODEL
+  if (cleanModel(settings.voice_tts_model || model) !== model) throw new Error('tts_model_unsupported:azure_realtime')
+  const requestedVoice = cleanVoice(settings.voice_tts_voice || 'marin').toLowerCase()
+  if (!AZURE_REALTIME_VOICES.has(requestedVoice)) throw new Error('tts_voice_unsupported:azure_realtime')
+  const voiceName = requestedVoice
+  const started = performance.now()
+  const socketUrl = new URL(`${endpoint.replace(/^https:/, 'wss:')}/openai/v1/realtime`)
+  socketUrl.searchParams.set('model', deployment)
+  socketUrl.searchParams.set('api-key', key)
+  const socket = new WebSocket(socketUrl.toString())
+  const audioChunks: Uint8Array[] = []
+  let inputTokens = 0
+  let outputTokens = 0
+  let responseRequested = false
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { socket.close() } catch { /* no-op */ }
+      if (error) reject(error); else resolve()
+    }
+    const timer = setTimeout(() => finish(new Error('tts_generation_timeout:azure_realtime')), 50_000)
+    const send = (payload: Record<string, unknown>) => {
+      if (socket.readyState !== WebSocket.OPEN) throw new Error('tts_socket_not_open:azure_realtime')
+      socket.send(JSON.stringify(payload))
+    }
+    const requestSpeech = () => {
+      if (responseRequested) return
+      responseRequested = true
+      const instruction = language === 'ar'
+        ? 'أنت محرّك نطق فقط. انطق النص الذي يرسله المستخدم كما هو قدر الإمكان وبعربية سعودية طبيعية ومهنية وودودة. لا تجب عن النص ولا تفسره ولا تضف أو تحذف معلومات. لا تنطق عبارات مثل «النص التالي» أو أي تعليمات.'
+        : 'You are a speech renderer only. Speak the user-provided text faithfully in natural, friendly professional English. Do not answer, explain, add, or remove information, and do not speak the instructions.'
+      send({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          instructions: instruction,
+          output_modalities: ['audio'],
+          audio: { output: { voice: voiceName, format: { type: 'audio/pcm', rate: 24000 } } },
+        },
+      })
+    }
+    const sendContent = () => {
+      send({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: spoken }],
+        },
+      })
+      send({ type: 'response.create' })
+    }
+
+    socket.onmessage = event => {
+      if (settled || typeof event.data !== 'string') return
+      let payload: RealtimeServerEvent
+      try { payload = JSON.parse(event.data) as RealtimeServerEvent } catch { return }
+      if (payload.type === 'session.created') {
+        try { requestSpeech() } catch (error) { finish(error instanceof Error ? error : new Error('tts_session_update_failed:azure_realtime')) }
+        return
+      }
+      if (payload.type === 'session.updated') {
+        try { sendContent() } catch (error) { finish(error instanceof Error ? error : new Error('tts_request_failed:azure_realtime')) }
+        return
+      }
+      if ((payload.type === 'response.output_audio.delta' || payload.type === 'response.audio.delta') && typeof payload.delta === 'string' && payload.delta) {
+        try { audioChunks.push(decodeBase64(payload.delta)) } catch { finish(new Error('tts_audio_decode_failed:azure_realtime')) }
+        return
+      }
+      if (payload.type === 'error') {
+        const detail = (payload.error?.message ?? payload.error?.code ?? 'unknown').replace(/\s+/g, ' ').slice(0, 240)
+        finish(new Error(`tts_generation_failed:azure_realtime:${detail}`))
+        return
+      }
+      if (payload.type === 'response.done') {
+        inputTokens = Number(payload.response?.usage?.input_tokens ?? 0)
+        outputTokens = Number(payload.response?.usage?.output_tokens ?? 0)
+        const responseError = payload.response?.status_details?.error?.message
+        if (payload.response?.status === 'failed' || responseError) {
+          finish(new Error(`tts_generation_failed:azure_realtime:${String(responseError ?? 'response_failed').replace(/\s+/g, ' ').slice(0, 240)}`))
+        } else finish()
+      }
+    }
+    socket.onerror = () => finish(new Error('tts_connection_failed:azure_realtime'))
+    socket.onclose = () => { if (!settled) finish(new Error('tts_connection_closed:azure_realtime')) }
+  })
+
+  const pcm = concatBytes(audioChunks)
+  if (!pcm.length) throw new Error('tts_audio_empty')
+  const durationMs = Math.round(pcm.length / (24000 * 2) * 1000)
+  if (!durationMs || durationMs > MAX_TTS_SECONDS * 1000) throw new Error('tts_duration_exceeded')
+  const bytes = pcm16ToWav(pcm)
+  if (bytes.length > 8 * 1024 * 1024) throw new Error('tts_audio_too_large')
+  const estimatedCost = await estimateCost(admin, 'azure_realtime', model, inputTokens, outputTokens, durationMs)
+  return { bytes, mimeType: 'audio/wav', durationMs, provider: 'azure_realtime', model, voiceName, inputTokens, outputTokens, estimatedCost, latencyMs: Math.round(performance.now() - started) }
+}
+
 export function shouldGenerateVoiceReply(settings: VoiceSettings, source: VoiceReplySource) {
   if (!settings.voice_enabled) return false
   return settings.voice_reply_mode === 'always_voice' || (settings.voice_reply_mode === 'voice_for_voice' && source === 'voice')
@@ -221,6 +361,7 @@ export async function assertTtsQuota(admin: SupabaseClient, organizationId: stri
 export async function generateSpeech(admin: SupabaseClient, settings: VoiceSettings, text: string, language: 'ar' | 'en'): Promise<GeneratedSpeech> {
   const spoken = speechText(text)
   if (!spoken) throw new Error('tts_text_empty')
+  if (settings.voice_tts_provider === 'azure_realtime') return generateAzureRealtimeSpeech(admin, settings, spoken, language)
   if (settings.voice_tts_provider === 'azure') return generateAzureSpeech(admin, settings, spoken)
   if (settings.voice_tts_provider === 'gemini') return generateGeminiSpeech(admin, settings, spoken, language)
   throw new Error('tts_provider_unsupported')
