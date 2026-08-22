@@ -85,6 +85,8 @@ export interface WidgetSyncResponse{
   humanTakeover:boolean
   assignedUserId?:string|null
   messages:WidgetHistoryMessage[]
+  hasMore:boolean
+  nextBefore:string|null
 }
 export interface WidgetSession{
   visitorId:string
@@ -137,7 +139,7 @@ export async function sendWidgetVoice(key:string,input:{visitorId:string;convers
   const response=await fetch(`${functionsBaseUrl}/widget-voice`,{method:'POST',headers:{'x-widget-key':key},body:form})
   return readJson<WidgetChatResponse>(response)
 }
-export async function syncWidgetConversation(key:string,input:{visitorId:string;conversationId:string}){
+export async function syncWidgetConversation(key:string,input:{visitorId:string;conversationId:string;limit?:number;before?:string}){
   const response=await fetch(`${functionsBaseUrl}/widget-sync`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify(input),cache:'no-store'})
   return readJson<WidgetSyncResponse>(response)
 }
