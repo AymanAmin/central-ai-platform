@@ -18,11 +18,11 @@ const assertRejectsCode = async (promise: Promise<unknown>, code: string) => {
 
 Deno.test('Groq provider sends strict JSON schema requests and maps token usage', async () => {
   const originalFetch = globalThis.fetch
-  let requestBody: Record<string, unknown> | null = null
+  const seen: { body?: Record<string, unknown> } = {}
   try {
     globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
       assertEquals(String(input), 'https://api.groq.com/openai/v1/chat/completions')
-      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      seen.body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       return new Response(JSON.stringify({
         choices: [{ message: { content: JSON.stringify({ answer: 'OK', intent: 'connection_test', requestHuman: false, actions: [] }) } }],
         usage: { prompt_tokens: 11, completion_tokens: 7 },
@@ -31,7 +31,7 @@ Deno.test('Groq provider sends strict JSON schema requests and maps token usage'
 
     const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
     const result = await provider.chat({ instructions: 'Return the contract.', userInput: 'Connection test', maxOutputTokens: 128 })
-    const responseFormat = requestBody?.response_format as { type?: string; json_schema?: { strict?: boolean } } | undefined
+    const responseFormat = seen.body?.response_format as { type?: string; json_schema?: { strict?: boolean } } | undefined
     assertEquals(responseFormat?.type, 'json_schema')
     assertEquals(responseFormat?.json_schema?.strict, true)
     assertEquals(result.answer, 'OK')
