@@ -1,4 +1,4 @@
-import { GroqProvider, createGroqProvider, normalizeGroqText } from './groq.ts'
+import { GroqProvider, createGroqProvider, normalizeGroqActions, normalizeGroqText } from './groq.ts'
 
 const assertEquals = (actual: unknown, expected: unknown) => {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -16,7 +16,7 @@ const assertRejectsCode = async (promise: Promise<unknown>, code: string) => {
   throw new Error(`Expected ${code}`)
 }
 
-Deno.test('Groq provider sends strict compatible JSON schema requests and maps token usage', async () => {
+Deno.test('Groq provider sends compact strict action schema and maps token usage', async () => {
   const originalFetch = globalThis.fetch
   const seen: { body?: Record<string, unknown> } = {}
   try {
@@ -32,10 +32,12 @@ Deno.test('Groq provider sends strict compatible JSON schema requests and maps t
     const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
     const result = await provider.chat({ instructions: 'Return the contract.', userInput: 'Connection test', maxOutputTokens: 512 })
     const responseFormat = seen.body?.response_format as { type?: string; json_schema?: { strict?: boolean; schema?: Record<string, unknown> } } | undefined
-    const schema = responseFormat?.json_schema?.schema as { properties?: { actions?: Record<string, unknown> } } | undefined
+    const schema = responseFormat?.json_schema?.schema as { properties?: { actions?: { items?: { properties?: Record<string, unknown>; required?: string[] } } } } | undefined
+    const actionItems = schema?.properties?.actions?.items
     assertEquals(responseFormat?.type, 'json_schema')
     assertEquals(responseFormat?.json_schema?.strict, true)
-    assertEquals('maxItems' in (schema?.properties?.actions ?? {}), false)
+    assertEquals(Object.keys(actionItems?.properties ?? {}), ['type', 'label', 'target', 'value'])
+    assertEquals(actionItems?.required, ['type', 'label', 'target', 'value'])
     assertEquals(seen.body?.reasoning_effort, 'low')
     assertEquals(result.answer, 'OK')
     assertEquals(result.inputTokens, 11)
@@ -43,6 +45,20 @@ Deno.test('Groq provider sends strict compatible JSON schema requests and maps t
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+Deno.test('Groq compact actions map to platform action fields', () => {
+  assertEquals(normalizeGroqActions([
+    { type: 'open_url', label: 'بوابة القبول', target: 'https://example.com/admission', value: null },
+    { type: 'call_phone', label: 'اتصل بنا', target: '+966112100000', value: null },
+    { type: 'open_screen', label: 'المحادثات', target: 'conversations', value: null },
+    { type: 'reply_option', label: 'نعم', target: null, value: 'yes' },
+  ]), [
+    { type: 'open_url', label: 'بوابة القبول', url: 'https://example.com/admission', phone: null, screen: null, value: null },
+    { type: 'call_phone', label: 'اتصل بنا', url: null, phone: '+966112100000', screen: null, value: null },
+    { type: 'open_screen', label: 'المحادثات', url: null, phone: null, screen: 'conversations', value: null },
+    { type: 'reply_option', label: 'نعم', url: null, phone: null, screen: null, value: 'yes' },
+  ])
 })
 
 Deno.test('Groq response normalization removes escaped newlines and raw markdown markers', () => {
@@ -67,12 +83,43 @@ Deno.test('Groq chat returns normalized answer text', async () => {
   }
 })
 
-Deno.test('Groq provider surfaces a sanitized provider 400 message', async () => {
+Deno.test('Groq retries once when generated JSON misses the expected schema', async () => {
   const originalFetch = globalThis.fetch
+  let calls = 0
   try {
-    globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: 'Invalid schema keyword maxItems\n' } }), { status: 400, headers: { 'content-type': 'application/json' } })
+    globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      calls += 1
+      const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ role?: string; content?: string }>; temperature?: number }
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { message: "Generated JSON does not match the expected schema. Please adjust your prompt. Error: jsonschema: '/actions/0' is missing properties" } }), { status: 400, headers: { 'content-type': 'application/json' } })
+      }
+      assertEquals(body.temperature, 0)
+      assertEquals(body.messages?.some(message => message.content?.includes('Schema repair:')), true)
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ answer: 'OK', intent: 'test', requestHuman: false, actions: [{ type: 'open_url', label: 'Open', target: 'https://example.com', value: null }] }) } }],
+        usage: { prompt_tokens: 20, completion_tokens: 8 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
+    const result = await provider.chat({ instructions: 'Return JSON.', userInput: 'test', maxOutputTokens: 512 })
+    assertEquals(calls, 2)
+    assertEquals(result.actions[0]?.url, 'https://example.com')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+Deno.test('Groq provider surfaces a sanitized non-schema provider 400 message without retry', async () => {
+  const originalFetch = globalThis.fetch
+  let calls = 0
+  try {
+    globalThis.fetch = async () => {
+      calls += 1
+      return new Response(JSON.stringify({ error: { message: 'Invalid schema keyword maxItems\n' } }), { status: 400, headers: { 'content-type': 'application/json' } })
+    }
     const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
     await assertRejectsCode(provider.chat({ instructions: 'Return JSON.', userInput: 'test', maxOutputTokens: 512 }), 'chat_provider_error:400:Invalid schema keyword maxItems')
+    assertEquals(calls, 1)
   } finally {
     globalThis.fetch = originalFetch
   }
