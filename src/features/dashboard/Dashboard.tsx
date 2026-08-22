@@ -43,7 +43,7 @@ export function Dashboard({profile}:{profile:Profile}){
     [tr('المحادثات النشطة','Active conversations'),stats.conversations,tr('غير مغلقة','Not closed')],
     [tr('بانتظار موظف','Waiting for agent'),stats.handoffs,tr('طلبات التحويل المفتوحة','Open handoffs')],
     [tr('مستندات المعرفة','Knowledge documents'),stats.documents,tr('مصادر المعرفة المسجلة','Registered sources')],
-    [tr('التكلفة التقديرية','Estimated cost'),`$${stats.cost.toFixed(4)}`,tr('وفق سجلات الاستخدام','From usage logs')],
+    [tr('التكلفة الفعلية','Actual cost'),`$${stats.cost.toFixed(4)}`,tr('حسب وضع فوترة كل مزود','Based on each provider billing mode')],
   ] as const
 
   const route=[
