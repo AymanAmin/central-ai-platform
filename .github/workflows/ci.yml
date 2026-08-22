@@ -45,7 +45,7 @@ jobs:
       - name: Typecheck Edge Functions
         run: deno check --node-modules-dir=auto supabase/functions/admin-api/index.ts supabase/functions/chat/index.ts supabase/functions/model-catalog/index.ts supabase/functions/integration-test/index.ts supabase/functions/widget-sync/index.ts
       - name: Test Edge shared providers
-        run: deno test --node-modules-dir=auto supabase/functions/_shared/azure-openai.test.ts supabase/functions/_shared/groq.test.ts supabase/functions/_shared/prompt-budget.test.ts
+        run: deno test --node-modules-dir=auto supabase/functions/_shared/azure-openai.test.ts supabase/functions/_shared/groq.test.ts supabase/functions/_shared/groq-resilient.test.ts supabase/functions/_shared/prompt-budget.test.ts
       - name: Configure GitHub Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
