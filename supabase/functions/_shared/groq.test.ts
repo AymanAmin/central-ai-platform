@@ -16,7 +16,7 @@ const assertRejectsCode = async (promise: Promise<unknown>, code: string) => {
   throw new Error(`Expected ${code}`)
 }
 
-Deno.test('Groq provider sends strict JSON schema requests and maps token usage', async () => {
+Deno.test('Groq provider sends strict compatible JSON schema requests and maps token usage', async () => {
   const originalFetch = globalThis.fetch
   const seen: { body?: Record<string, unknown> } = {}
   try {
@@ -30,13 +30,27 @@ Deno.test('Groq provider sends strict JSON schema requests and maps token usage'
     }
 
     const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
-    const result = await provider.chat({ instructions: 'Return the contract.', userInput: 'Connection test', maxOutputTokens: 128 })
-    const responseFormat = seen.body?.response_format as { type?: string; json_schema?: { strict?: boolean } } | undefined
+    const result = await provider.chat({ instructions: 'Return the contract.', userInput: 'Connection test', maxOutputTokens: 512 })
+    const responseFormat = seen.body?.response_format as { type?: string; json_schema?: { strict?: boolean; schema?: Record<string, unknown> } } | undefined
+    const schema = responseFormat?.json_schema?.schema as { properties?: { actions?: Record<string, unknown> } } | undefined
     assertEquals(responseFormat?.type, 'json_schema')
     assertEquals(responseFormat?.json_schema?.strict, true)
+    assertEquals('maxItems' in (schema?.properties?.actions ?? {}), false)
+    assertEquals(seen.body?.reasoning_effort, 'low')
     assertEquals(result.answer, 'OK')
     assertEquals(result.inputTokens, 11)
     assertEquals(result.outputTokens, 7)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+Deno.test('Groq provider surfaces a sanitized provider 400 message', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: 'Invalid schema keyword maxItems\n' } }), { status: 400, headers: { 'content-type': 'application/json' } })
+    const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-20b', 'gemini-embedding-001')
+    await assertRejectsCode(provider.chat({ instructions: 'Return JSON.', userInput: 'test', maxOutputTokens: 512 }), 'chat_provider_error:400:Invalid schema keyword maxItems')
   } finally {
     globalThis.fetch = originalFetch
   }

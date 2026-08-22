@@ -5,6 +5,10 @@ interface GroqChatResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number }
 }
 
+interface GroqErrorResponse {
+  error?: { message?: string; type?: string; code?: string | null }
+}
+
 const actionSchema = {
   type: 'object',
   properties: {
@@ -23,13 +27,29 @@ const baseProperties = {
   answer: { type: 'string' },
   intent: { type: 'string' },
   requestHuman: { type: 'boolean' },
-  actions: { type: 'array', maxItems: 4, items: actionSchema },
+  actions: { type: 'array', items: actionSchema },
 }
 
 function extractContent(payload: GroqChatResponse): string {
   const content = payload.choices?.[0]?.message?.content
   if (typeof content === 'string' && content.trim()) return content.trim()
   throw new Error('groq_output_missing')
+}
+
+function safeProviderDetail(value: unknown) {
+  if (typeof value !== 'string') return ''
+  return value.replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7E\u0600-\u06FF]/g, '').trim().slice(0, 280)
+}
+
+async function providerError(response: Response) {
+  let detail = ''
+  try {
+    const payload = await response.json() as GroqErrorResponse
+    detail = safeProviderDetail(payload.error?.message || payload.error?.code || payload.error?.type)
+  } catch {
+    // Do not expose arbitrary upstream response bodies.
+  }
+  return detail ? `chat_provider_error:${response.status}:${detail}` : `chat_provider_error:${response.status}`
 }
 
 export class GroqProvider implements AiProvider {
@@ -56,6 +76,7 @@ export class GroqProvider implements AiProvider {
       ],
       max_completion_tokens: maxOutputTokens,
       temperature: 0.2,
+      reasoning_effort: 'low',
     }
     if (schema) {
       body.response_format = {
@@ -73,7 +94,7 @@ export class GroqProvider implements AiProvider {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(60_000),
     })
-    if (!response.ok) throw new Error(`chat_provider_error:${response.status}`)
+    if (!response.ok) throw new Error(await providerError(response))
     const payload = await response.json() as GroqChatResponse
     const text = extractContent(payload)
     return {
