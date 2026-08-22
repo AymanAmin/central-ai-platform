@@ -2,80 +2,13 @@ import { useMemo,useState } from 'react'
 import { Badge,Card,Empty,PageHeader } from '../../components/Ui'
 import { useI18n } from '../../lib/i18n'
 import { supabase } from '../../lib/supabase'
+import { codeLabel,codeLanguages,integrationEndpoint,integrationSnippet,scalarValue,type CodeLanguage } from './integrationSnippets'
 
-type CodeLanguage='curl'|'javascript'|'python'|'php'|'csharp'
 type VariableRow={id:string;key:string;value:string}
 type TestEnvelope={success:boolean;requestOk?:boolean;upstreamStatus?:number;latencyMs?:number;response?:unknown;error?:string}
 
-const endpoint='https://tffgvfovlpurxmkqkwwq.supabase.co/functions/v1/chat'
-const codeLanguages:CodeLanguage[]=['curl','javascript','python','php','csharp']
-const codeLabel:Record<CodeLanguage,string>={curl:'cURL',javascript:'JavaScript',python:'Python',php:'PHP',csharp:'C#'}
 const id=(prefix:string)=>`${prefix}-${crypto.randomUUID()}`
 const safeJson=(value:unknown)=>JSON.stringify(value,null,2)
-const shellSingleQuote=(value:string)=>value.replace(/'/g,"'\"'\"'")
-const scalar=(value:string):unknown=>{const clean=value.trim();if(clean==='true')return true;if(clean==='false')return false;if(clean==='null')return null;if(clean!==''&&Number.isFinite(Number(clean)))return Number(clean);if((clean.startsWith('{')&&clean.endsWith('}'))||(clean.startsWith('[')&&clean.endsWith(']'))){try{return JSON.parse(clean)}catch{/* keep as text */}}return value}
-
-function snippet(language:CodeLanguage,payload:Record<string,unknown>){
-  const body=safeJson(payload)
-  if(language==='curl')return `curl -X POST '${endpoint}' \\
-  -H 'Authorization: Bearer ai_live_YOUR_API_KEY' \\
-  -H 'Content-Type: application/json' \\
-  --data '${shellSingleQuote(body)}'`
-  if(language==='javascript')return `const response = await fetch('${endpoint}', {
-  method: 'POST',
-  headers: {
-    Authorization: 'Bearer ai_live_YOUR_API_KEY',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify(${body}),
-})
-
-const result = await response.json()
-console.log(result)`
-  if(language==='python')return `import requests
-
-payload = ${body.replace(/\btrue\b/g,'True').replace(/\bfalse\b/g,'False').replace(/\bnull\b/g,'None')}
-response = requests.post(
-    '${endpoint}',
-    headers={
-        'Authorization': 'Bearer ai_live_YOUR_API_KEY',
-        'Content-Type': 'application/json',
-    },
-    json=payload,
-    timeout=60,
-)
-print(response.json())`
-  if(language==='php')return `<?php
-$payload = ${body};
-$ch = curl_init('${endpoint}');
-curl_setopt_array($ch, [
-  CURLOPT_POST => true,
-  CURLOPT_RETURNTRANSFER => true,
-  CURLOPT_HTTPHEADER => [
-    'Authorization: Bearer ai_live_YOUR_API_KEY',
-    'Content-Type: application/json',
-  ],
-  CURLOPT_POSTFIELDS => json_encode($payload),
-]);
-$response = curl_exec($ch);
-curl_close($ch);
-echo $response;`
-  return `using System.Net.Http.Headers;
-using System.Text;
-
-using var client = new HttpClient();
-client.DefaultRequestHeaders.Authorization =
-    new AuthenticationHeaderValue("Bearer", "ai_live_YOUR_API_KEY");
-
-var json = """
-${body}
-""";
-var response = await client.PostAsync(
-    "${endpoint}",
-    new StringContent(json, Encoding.UTF8, "application/json")
-);
-Console.WriteLine(await response.Content.ReadAsStringAsync());`
-}
 
 export function IntegrationGuide(){
   const {language,tr}=useI18n()
@@ -97,7 +30,7 @@ export function IntegrationGuide(){
   const [result,setResult]=useState<TestEnvelope|null>(null)
   const [error,setError]=useState('')
 
-  const context=useMemo(()=>Object.fromEntries(variables.map(row=>[row.key.trim(),scalar(row.value)]).filter(([key])=>Boolean(key))),[variables])
+  const context=useMemo(()=>Object.fromEntries(variables.map(row=>[row.key.trim(),scalarValue(row.value)]).filter(([key])=>Boolean(key))),[variables])
   const payload=useMemo(()=>({
     channel:channel.trim()||'web',
     customer:{
@@ -111,7 +44,7 @@ export function IntegrationGuide(){
     message:{externalId:messageId.trim(),type:'text',text:messageText.trim()},
     context,
   }),[channel,customerId,customerName,customerPhone,customerEmail,requestLanguage,conversationId,messageId,messageText,context])
-  const generated=useMemo(()=>snippet(codeLanguage,payload),[codeLanguage,payload])
+  const generated=useMemo(()=>integrationSnippet(codeLanguage,payload),[codeLanguage,payload])
   const responseRows=useMemo(()=>{
     if(!result||result.response==null)return [] as Array<[string,string]>
     if(typeof result.response!=='object'||Array.isArray(result.response))return [['response',String(result.response)]]
@@ -149,8 +82,7 @@ export function IntegrationGuide(){
     <div className="integration-workbench">
       <Card className="integration-builder">
         <div className="integration-section-head"><div><span>{tr('طلب تجريبي','Test request')}</span><h2>{tr('متغيرات الإرسال','Request variables')}</h2><p>{tr('الاختبار ينفذ نفس عقد /chat المستخدم في الربط الحقيقي.','The test executes the same /chat contract used by a real integration.')}</p></div><Badge>{requestLanguage.toUpperCase()}</Badge></div>
-
-        <div className="integration-endpoint"><span>{tr('نقطة الاتصال','Endpoint')}</span><code>{endpoint}</code></div>
+        <div className="integration-endpoint"><span>{tr('نقطة الاتصال','Endpoint')}</span><code>{integrationEndpoint}</code></div>
 
         <div className="integration-form-grid">
           <label className="span-2"><span>{tr('مفتاح API للاختبار','API key for testing')}</span><div className="integration-secret"><input type={showKey?'text':'password'} autoComplete="off" spellCheck={false} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="ai_live_…"/><button type="button" onClick={()=>setShowKey(v=>!v)}>{showKey?tr('إخفاء','Hide'):tr('إظهار','Show')}</button></div><small>{tr('يُرسل إلى وظيفة اختبار آمنة ولا يُخزن في قاعدة البيانات أو الكود المعروض.','Sent to a secure test function and never stored in the database or shown in generated code.')}</small></label>
