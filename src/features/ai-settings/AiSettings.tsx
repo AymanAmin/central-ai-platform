@@ -36,11 +36,13 @@ interface ProviderTestResult {
 }
 
 const nullableNumber = (value: string) => value === '' ? null : Number(value)
+const azureEndpointPattern = /^https:\/\/[a-z0-9-]+\.openai\.azure\.com\/?$/i
 
 const providerLabel = (provider: string) => {
   if (provider === 'gemini') return 'Google Gemini'
   if (provider === 'openrouter') return 'OpenRouter'
   if (provider === 'openai') return 'OpenAI'
+  if (provider === 'azure_openai') return 'Microsoft Azure OpenAI'
   return provider
 }
 
@@ -53,10 +55,12 @@ export function AiSettings({ profile }: { profile: Profile }) {
   const [providers, setProviders] = useState<ProviderSetting[]>([])
   const [providerId, setProviderId] = useState('')
   const [providerSecret, setProviderSecret] = useState('')
+  const [azureEndpoint, setAzureEndpoint] = useState('')
   const [providerMsg, setProviderMsg] = useState('')
   const [providerBusy, setProviderBusy] = useState(false)
 
   const selectedProvider = useMemo(() => providers.find(item => item.id === providerId) ?? providers.find(item => item.is_default) ?? null, [providers, providerId])
+  const isAzureOpenAi = selectedProvider?.provider === 'azure_openai'
 
   useEffect(() => {
     void supabase.from('organizations').select('*').then(r => setOrgs((r.data ?? []) as Organization[]))
@@ -94,12 +98,22 @@ export function AiSettings({ profile }: { profile: Profile }) {
   const saveProviderSecret = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!selectedProvider || !providerSecret.trim()) return
+    let secretPayload = providerSecret.trim()
+    if (isAzureOpenAi) {
+      const endpoint = azureEndpoint.trim().replace(/\/$/, '')
+      if (!azureEndpointPattern.test(endpoint)) {
+        setProviderMsg(tr('أدخل Azure OpenAI Endpoint صالحًا بصيغة https://RESOURCE.openai.azure.com', 'Enter a valid Azure OpenAI endpoint in the form https://RESOURCE.openai.azure.com'))
+        return
+      }
+      secretPayload = JSON.stringify({ apiKey: providerSecret.trim(), endpoint })
+    }
     setProviderBusy(true)
     setProviderMsg('')
     try {
-      await adminApi({ action: 'set_ai_provider_secret', providerSettingId: selectedProvider.id, providerSecret })
+      await adminApi({ action: 'set_ai_provider_secret', providerSettingId: selectedProvider.id, providerSecret: secretPayload })
       setProviderSecret('')
-      setProviderMsg(tr(`تم حفظ مفتاح ${providerLabel(selectedProvider.provider)} بأمان داخل Supabase Vault.`, `${providerLabel(selectedProvider.provider)} API key was stored securely in Supabase Vault.`))
+      setAzureEndpoint('')
+      setProviderMsg(tr(`تم حفظ بيانات ${providerLabel(selectedProvider.provider)} بأمان داخل Supabase Vault.`, `${providerLabel(selectedProvider.provider)} credentials were stored securely in Supabase Vault.`))
     } catch (error) {
       setProviderMsg(error instanceof Error ? error.message : tr('تعذر حفظ المفتاح.', 'Unable to save the API key.'))
     } finally {
@@ -113,7 +127,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
     setProviderMsg('')
     try {
       const result = await adminApi<ProviderTestResult>({ action: 'test_ai_provider', providerSettingId: selectedProvider.id })
-      if (activateAfterTest && !selectedProvider.is_default) {
+      if (activateAfterTest && !selectedProvider.is_default && !isAzureOpenAi) {
         const previousDefault = providers.find(item => item.is_default)
         const disable = await supabase.from('ai_provider_settings').update({ is_default: false }).is('organization_id', null).neq('id', selectedProvider.id)
         if (disable.error) throw disable.error
@@ -158,7 +172,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
       {providers.length ? <>
         <div className="settings-grid">
           <label>{tr('المزود الذي تريد إدارته', 'Provider to manage')}
-            <select value={selectedProvider?.id ?? ''} onChange={e => { setProviderId(e.target.value); setProviderSecret(''); setProviderMsg('') }}>
+            <select value={selectedProvider?.id ?? ''} onChange={e => { setProviderId(e.target.value); setProviderSecret(''); setAzureEndpoint(''); setProviderMsg('') }}>
               {providers.map(item => <option key={item.id} value={item.id}>{providerLabel(item.provider)}{item.is_default ? tr(' — الافتراضي', ' — default') : ''}</option>)}
             </select>
           </label>
@@ -170,7 +184,23 @@ export function AiSettings({ profile }: { profile: Profile }) {
           {tr('OpenRouter مضبوط على openrouter/free للمحادثة. التضمين يستخدم text-embedding-3-small بأبعاد 1536 للحفاظ على توافق RAG؛ لذلك المحادثة المجانية لا تعني أن التضمين بلا تكلفة.', 'OpenRouter uses openrouter/free for chat. Embeddings use text-embedding-3-small at 1536 dimensions to keep RAG compatible, so free chat does not mean embeddings are cost-free.')}
         </div>}
 
+        {isAzureOpenAi && <div className="notice">
+          {tr('Azure OpenAI مخصص هنا كمسار محادثة احتياطي. سيبقى Gemini هو الافتراضي وGemini Embeddings هو مسار RAG. اسم النشر المتوقع حاليًا هو gpt-4.1-mini، ولن يُفعّل Azure تلقائيًا قبل نجاح الاختبار.', 'Azure OpenAI is configured here as a chat fallback. Gemini remains the default and Gemini Embeddings remains the RAG path. The expected deployment name is currently gpt-4.1-mini, and Azure is never activated automatically before a successful test.')}
+        </div>}
+
         <form className="stack" onSubmit={saveProviderSecret} style={{ marginTop: 12 }}>
+          {isAzureOpenAi && <label>{tr('Azure OpenAI Endpoint', 'Azure OpenAI endpoint')}
+            <input
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              dir="ltr"
+              value={azureEndpoint}
+              onChange={e => setAzureEndpoint(e.target.value)}
+              placeholder="https://RESOURCE.openai.azure.com"
+            />
+            <FieldHint>{tr('يُقبل فقط HTTPS على نطاق openai.azure.com لمنع الوصول إلى عناوين غير موثوقة.', 'Only HTTPS endpoints under openai.azure.com are accepted to prevent access to untrusted hosts.')}</FieldHint>
+          </label>}
           <label>{tr(`مفتاح ${providerLabel(selectedProvider?.provider ?? '')} API`, `${providerLabel(selectedProvider?.provider ?? '')} API key`)}
             <input
               type="password"
@@ -182,9 +212,9 @@ export function AiSettings({ profile }: { profile: Profile }) {
             <FieldHint>{tr('يُرسل المفتاح عبر HTTPS إلى الخادم ويُخزن مشفرًا داخل Supabase Vault، ولا تتم إعادة عرضه.', 'The key is sent over HTTPS to the server, encrypted in Supabase Vault, and never displayed again.')}</FieldHint>
           </label>
           <div className="form-actions">
-            <button type="submit" disabled={providerBusy || !providerSecret.trim()}>{tr('حفظ المفتاح', 'Save API key')}</button>
+            <button type="submit" disabled={providerBusy || !providerSecret.trim() || Boolean(isAzureOpenAi && !azureEndpoint.trim())}>{tr('حفظ المفتاح', 'Save API key')}</button>
             <button type="button" className="ghost" disabled={providerBusy || !selectedProvider} onClick={() => void testProvider(false)}>{tr('اختبار الاتصال', 'Test connection')}</button>
-            {!selectedProvider?.is_default && <button type="button" disabled={providerBusy || !selectedProvider} onClick={() => void testProvider(true)}>{tr('اختبار وتفعيل', 'Test & activate')}</button>}
+            {!selectedProvider?.is_default && !isAzureOpenAi && <button type="button" disabled={providerBusy || !selectedProvider} onClick={() => void testProvider(true)}>{tr('اختبار وتفعيل', 'Test & activate')}</button>}
           </div>
         </form>
       </> : <p>{tr('جارٍ تحميل إعدادات المزود…', 'Loading provider settings…')}</p>}

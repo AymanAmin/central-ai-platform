@@ -2,7 +2,8 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { getSupabaseSecretKey, json, preflight } from '../_shared/runtime.ts'
 import { createAiProvider } from '../_shared/ai.ts'
-import { globalProviderSettings, runtimeProvider } from '../_shared/agent-runtime.ts'
+import { createAzureOpenAiProvider } from '../_shared/azure-openai.ts'
+import { createRuntimeProvider, globalProviderSettings } from '../_shared/agent-runtime.ts'
 import { normalizeToolRequestSchema } from '../_shared/tool-schema.ts'
 
 type AdminAction =
@@ -66,9 +67,11 @@ const sha256 = async (value: string) => {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 const inviteRedirectUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
-const allowedProviders = new Set(['gemini', 'openrouter', 'openai'])
+const allowedProviders = new Set(['gemini', 'openrouter', 'openai', 'azure_openai'])
+const allowedEmbeddingProviders = new Set(['gemini', 'openrouter', 'openai'])
 const cleanModel = (value: string | undefined) => value?.trim().slice(0, 180) ?? ''
 const validateProvider = (value: string | undefined) => !!value && allowedProviders.has(value)
+const validateEmbeddingProvider = (value: string | undefined) => !!value && allowedEmbeddingProviders.has(value)
 
 Deno.serve(async (req: Request) => {
   const cors = preflight(req)
@@ -152,7 +155,9 @@ Deno.serve(async (req: Request) => {
       const secret = await admin.rpc('get_ai_provider_secret', { p_provider_setting_id: setting.data.id })
       if (secret.error) throw secret.error
       if (typeof secret.data !== 'string' || !secret.data.trim()) return json({ success: false, error: 'provider_secret_missing' }, 409)
-      const ai = createAiProvider(setting.data, secret.data)
+      const ai = setting.data.provider === 'azure_openai'
+        ? createAzureOpenAiProvider(setting.data, secret.data)
+        : createAiProvider(setting.data, secret.data)
       const started = performance.now()
       const test = await ai.chat({ instructions: 'You are a provider compatibility test. Return answer exactly OK, intent connection_test, requestHuman false, and no actions.', userInput: 'Connection test', maxOutputTokens: 128 })
       if (test.answer.trim().toUpperCase() !== 'OK' || test.requestHuman || test.actions.length) throw new Error('provider_structured_test_failed')
@@ -169,12 +174,11 @@ Deno.serve(async (req: Request) => {
       const embeddingModel = cleanModel(config?.embeddingModel)
       const fallbackProvider = config?.fallbackProvider || null
       const fallbackModel = cleanModel(config?.fallbackModel ?? undefined) || null
-      if (!validateProvider(chatProvider) || !chatModel || !validateProvider(embeddingProvider) || !embeddingModel) return json({ success: false, error: 'agent_runtime_fields_required' }, 400)
+      if (!validateProvider(chatProvider) || !chatModel || !validateEmbeddingProvider(embeddingProvider) || !embeddingModel) return json({ success: false, error: 'agent_runtime_fields_required' }, 400)
       if ((fallbackProvider && !validateProvider(fallbackProvider)) || (fallbackProvider && !fallbackModel) || (!fallbackProvider && fallbackModel)) return json({ success: false, error: 'invalid_fallback_configuration' }, 400)
 
       const started = performance.now()
-      const chatSettings = await runtimeProvider(admin, chatProvider!, chatModel, embeddingModel)
-      const chatAi = createAiProvider(chatSettings)
+      const { ai: chatAi } = await createRuntimeProvider(admin, chatProvider!, chatModel, embeddingModel)
       const chatStarted = performance.now()
       const chatTest = await chatAi.chat({ instructions: 'You are a provider compatibility test. Return answer exactly OK, intent connection_test, requestHuman false, and no actions.', userInput: 'Connection test', maxOutputTokens: 128 })
       if (chatTest.answer.trim().toUpperCase() !== 'OK' || chatTest.requestHuman || chatTest.actions.length) throw new Error('agent_chat_structured_test_failed')
@@ -190,8 +194,7 @@ Deno.serve(async (req: Request) => {
 
       let fallbackLatencyMs: number | null = null
       if (fallbackProvider && fallbackModel) {
-        const fallbackSettings = await runtimeProvider(admin, fallbackProvider, fallbackModel, embeddingModel)
-        const fallbackAi = createAiProvider(fallbackSettings)
+        const { ai: fallbackAi } = await createRuntimeProvider(admin, fallbackProvider, fallbackModel, embeddingModel)
         const fallbackStarted = performance.now()
         const fallbackTest = await fallbackAi.chat({ instructions: 'You are a provider compatibility test. Return answer exactly OK, intent connection_test, requestHuman false, and no actions.', userInput: 'Connection test', maxOutputTokens: 128 })
         if (fallbackTest.answer.trim().toUpperCase() !== 'OK' || fallbackTest.requestHuman || fallbackTest.actions.length) throw new Error('agent_fallback_structured_test_failed')
