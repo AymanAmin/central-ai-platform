@@ -1,4 +1,4 @@
-import { GroqProvider, createGroqProvider, normalizeGroqActions, normalizeGroqText } from './groq.ts'
+import { GroqProvider, compactGroqRuntimeInput, compactGroqRuntimeInstructions, createGroqProvider, normalizeGroqActions, normalizeGroqText } from './groq.ts'
 
 const assertEquals = (actual: unknown, expected: unknown) => {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -45,6 +45,23 @@ Deno.test('Groq provider sends compact strict action schema and maps token usage
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+Deno.test('Groq compacts Central AI runtime history and RAG context without dropping the current message', () => {
+  const history = Array.from({ length: 12 }, (_, index) => `${index % 2 ? 'assistant' : 'user'}: ${'س'.repeat(220)}`).join('\n')
+  const knowledge = `[Source 1 | document=1 | page=1 | similarity=0.910]\n${'م'.repeat(2100)}\n\n[Source 2 | document=2 | page=2 | similarity=0.870]\n${'ع'.repeat(1900)}`
+  const input = `Customer profile:\n${JSON.stringify({ name: 'محمد', metadata: 'x'.repeat(900) })}\n\nConversation summary:\n${'خ'.repeat(1200)}\n\nRecent messages:\n${history}\n\nRetrieved knowledge:\n${knowledge}\n\nCurrent customer message:\nطيب اعطني نبذه عن بكالوريوس الطب البشري`
+  const compacted = compactGroqRuntimeInput(input)
+  if (compacted.length >= input.length * .55) throw new Error(`Expected substantial Groq prompt reduction, got ${compacted.length}/${input.length}`)
+  if (!compacted.endsWith('طيب اعطني نبذه عن بكالوريوس الطب البشري')) throw new Error('Current customer message was not preserved')
+  if (!compacted.includes('[Source 1 |')) throw new Error('Top RAG source was not preserved')
+})
+
+Deno.test('Groq compacts verbose tool instructions only for the runtime tool section', () => {
+  const instructions = `System policy stays intact.\n\nAvailable read-only tools:\n- GET_APPOINTMENT: ${'تفاصيل وأمثلة '.repeat(160)}`
+  const compacted = compactGroqRuntimeInstructions(instructions)
+  if (!compacted.startsWith('System policy stays intact.')) throw new Error('System instructions changed unexpectedly')
+  if (compacted.length >= instructions.length) throw new Error('Tool instructions were not compacted')
 })
 
 Deno.test('Groq compact actions map to platform action fields', () => {
