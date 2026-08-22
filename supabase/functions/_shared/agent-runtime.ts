@@ -2,6 +2,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { createAiProvider, type AiProvider, type AiProviderSettings } from './ai.ts'
 import { createAzureOpenAiProvider } from './azure-openai.ts'
 import { createGroqProvider } from './groq.ts'
+import { withPromptBudget } from './prompt-budget.ts'
 
 export interface OrganizationAgentRuntime {
   organization_id: string
@@ -93,6 +94,8 @@ export async function createRuntimeProvider(
   embeddingModel: string,
 ): Promise<{ settings: RuntimeProvider; ai: AiProvider }> {
   const settings = await runtimeProvider(admin, provider, chatModel, embeddingModel)
+  let ai: AiProvider
+
   if (provider === 'azure_openai' || provider === 'groq') {
     let secret: string | null = null
     if (settings.id) {
@@ -101,12 +104,12 @@ export async function createRuntimeProvider(
       secret = typeof secretResult.data === 'string' && secretResult.data.trim() ? secretResult.data : null
     }
     if (provider === 'groq' && !secret && !Deno.env.get('GROQ_API_KEY')?.trim()) throw new Error('ai_provider_not_configured')
-    return {
-      settings,
-      ai: provider === 'azure_openai'
-        ? createAzureOpenAiProvider(settings, secret)
-        : createGroqProvider(settings, secret),
-    }
+    ai = provider === 'azure_openai'
+      ? createAzureOpenAiProvider(settings, secret)
+      : createGroqProvider(settings, secret)
+  } else {
+    ai = createAiProvider(settings)
   }
-  return { settings, ai: createAiProvider(settings) }
+
+  return { settings, ai: withPromptBudget(ai) }
 }
