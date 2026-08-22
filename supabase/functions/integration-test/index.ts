@@ -1,12 +1,12 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createAdminClient, json, preflight, sha256 } from '../_shared/runtime.ts'
+import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 
 type JsonObject = Record<string, unknown>
-interface RequestBody { apiKey?: string; payload?: JsonObject }
+interface RequestBody { apiClientId?: string; payload?: JsonObject }
 
 const MAX_PAYLOAD_BYTES = 32 * 1024
-const cleanKey = (value: unknown) => typeof value === 'string' ? value.trim() : ''
 const isObject = (value: unknown): value is JsonObject => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+const clean = (value: unknown, max = 220) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 
 Deno.serve(async (req: Request) => {
   const cors = preflight(req)
@@ -27,10 +27,8 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json() as RequestBody
-    const apiKey = cleanKey(body.apiKey)
-    if (!apiKey.startsWith('ai_live_') || apiKey.length < 24 || apiKey.length > 256) {
-      return json({ success: false, error: 'invalid_api_key_format' }, 400)
-    }
+    const apiClientId = clean(body.apiClientId, 80)
+    if (!apiClientId) return json({ success: false, error: 'api_client_required' }, 400)
     if (!isObject(body.payload)) return json({ success: false, error: 'payload_required' }, 400)
 
     const serialized = JSON.stringify(body.payload)
@@ -38,33 +36,73 @@ Deno.serve(async (req: Request) => {
       return json({ success: false, error: 'payload_too_large' }, 413)
     }
 
-    const keyHash = await sha256(apiKey)
-    const client = await admin.from('api_clients').select('organization_id,is_active').eq('api_key_hash', keyHash).maybeSingle()
-    if (client.error) throw client.error
-    if (!client.data?.is_active) return json({ success: false, error: 'invalid_api_key' }, 400)
-    if (profile.data.role !== 'SUPER_ADMIN' && client.data.organization_id !== profile.data.organization_id) {
-      return json({ success: false, error: 'api_key_outside_organization' }, 403)
+    const clientResult = await admin.from('api_clients').select('id,organization_id,name,code,is_active,capabilities').eq('id', apiClientId).maybeSingle()
+    const client = clientResult.data
+    if (clientResult.error) throw clientResult.error
+    if (!client?.is_active) return json({ success: false, error: 'api_client_not_found_or_inactive' }, 404)
+    if (profile.data.role !== 'SUPER_ADMIN' && client.organization_id !== profile.data.organization_id) {
+      return json({ success: false, error: 'api_client_outside_organization' }, 403)
     }
 
+    const capabilities = Array.isArray(client.capabilities) ? client.capabilities.filter((value): value is string => typeof value === 'string') : []
+    if (!capabilities.includes('chat')) return json({ success: false, error: 'capability_not_allowed' }, 400)
+
+    const message = isObject(body.payload.message) ? body.payload.message : null
+    const conversation = isObject(body.payload.conversation) ? body.payload.conversation : null
+    const context = isObject(body.payload.context) ? body.payload.context : {}
+    const question = clean(message?.text, 16_000)
+    const conversationExternalId = clean(conversation?.externalId, 320)
+    if (!question) return json({ success: false, error: 'message_text_required' }, 400)
+
+    const requestedKnowledgeBaseId = capabilities.includes('select_knowledge_base') ? clean(context.knowledgeBaseId, 80) || null : null
     const url = Deno.env.get('SUPABASE_URL')
     if (!url) throw new Error('supabase_url_missing')
+
     const started = performance.now()
-    const response = await fetch(`${url}/functions/v1/chat`, {
+    const response = await fetch(`${url}/functions/v1/playground`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: serialized,
+      headers: { authorization, 'content-type': 'application/json' },
+      body: JSON.stringify({ organizationId: client.organization_id, knowledgeBaseId: requestedKnowledgeBaseId, question }),
       signal: AbortSignal.timeout(60_000),
     })
     const text = await response.text()
-    let payload: unknown = text
-    try { payload = text ? JSON.parse(text) : null } catch { /* Keep a text response for diagnostics. */ }
+    let preview: unknown = text
+    try { preview = text ? JSON.parse(text) : null } catch { /* Keep text diagnostics. */ }
+
+    const latencyMs = Math.round(performance.now() - started)
+    if (!response.ok || !isObject(preview) || preview.success !== true) {
+      return json({
+        success: true,
+        requestOk: false,
+        upstreamStatus: response.status,
+        latencyMs,
+        previewMode: 'non_persistent',
+        response: preview,
+      })
+    }
+
+    const externalShape = {
+      success: true,
+      conversationId: conversationExternalId || null,
+      answer: typeof preview.answer === 'string' ? preview.answer : '',
+      intent: typeof preview.intent === 'string' ? preview.intent : 'unknown',
+      requestHuman: false,
+      actions: [],
+      confidence: typeof preview.confidence === 'number' ? preview.confidence : null,
+      sources: Array.isArray(preview.sources) ? preview.sources : [],
+      provider: typeof preview.provider === 'string' ? preview.provider : null,
+      model: typeof preview.model === 'string' ? preview.model : null,
+      usage: isObject(preview.usage) ? preview.usage : null,
+    }
 
     return json({
       success: true,
-      requestOk: response.ok,
-      upstreamStatus: response.status,
-      latencyMs: Math.round(performance.now() - started),
-      response: payload,
+      requestOk: true,
+      upstreamStatus: 200,
+      latencyMs,
+      previewMode: 'non_persistent',
+      apiClient: { id: client.id, name: client.name, code: client.code },
+      response: externalShape,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'integration_test_failed'
