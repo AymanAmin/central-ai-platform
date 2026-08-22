@@ -9,5 +9,12 @@ export async function getProfile(userId:string):Promise<Profile|null>{
 export const signIn=(email:string,password:string)=>supabase.auth.signInWithPassword({ email, password })
 export const signUp=(email:string,password:string)=>supabase.auth.signUp({ email, password })
 export const signOut=()=>supabase.auth.signOut()
-export const resetPassword=(email:string)=>supabase.auth.resetPasswordForEmail(email,{ redirectTo: `${location.origin}${location.pathname}#reset-password` })
+
+const configuredAppUrl=import.meta.env.VITE_APP_URL?.trim()
+const appBaseUrl=()=>{
+  const value=configuredAppUrl||`${location.origin}${import.meta.env.BASE_URL}`
+  return value.endsWith('/')?value:`${value}/`
+}
+
+export const resetPassword=(email:string)=>supabase.auth.resetPasswordForEmail(email,{ redirectTo: `${appBaseUrl()}#reset-password` })
 export const updatePassword=(password:string)=>supabase.auth.updateUser({ password })
