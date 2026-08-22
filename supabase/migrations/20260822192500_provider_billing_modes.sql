@@ -72,20 +72,26 @@ update public.usage_logs u
 set
   billing_mode = case
     when u.provider = 'openrouter' and (u.model = 'openrouter/free' or u.model like '%:free') then 'free'
-    else coalesce(p.billing_mode, 'paid')
+    else coalesce((
+      select p.billing_mode
+      from public.provider_billing_settings p
+      where p.provider = u.provider
+    ), 'paid')
   end,
   estimated_cost = case
     when u.provider = 'openrouter' and (u.model = 'openrouter/free' or u.model like '%:free') then 0
-    when coalesce(p.billing_mode, 'paid') = 'free' then 0
+    when coalesce((
+      select p.billing_mode
+      from public.provider_billing_settings p
+      where p.provider = u.provider
+    ), 'paid') = 'free' then 0
     else u.commercial_estimated_cost
-  end
-from (select 1) seed
-left join public.provider_billing_settings p on p.provider = u.provider;
+  end;
 
 create or replace function app_private.apply_usage_billing_mode()
 returns trigger
 language plpgsql
-security definer
+security invoker
 set search_path = ''
 as $$
 declare
