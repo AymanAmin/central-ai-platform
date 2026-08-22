@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
+import { GROQ_AGENT_STRICT_MODELS, GROQ_FREE_PLAN_BY_ID } from '../_shared/groq-models.ts'
 
 type Provider = 'gemini' | 'openrouter' | 'openai' | 'azure_openai' | 'groq'
 type CatalogModel = {
@@ -31,7 +32,6 @@ type GroqModel = { id?: string; active?: boolean; context_window?: number }
 type GroqModelsResponse = { data?: GroqModel[] }
 
 const allowedProviders = new Set<Provider>(['gemini', 'openrouter', 'openai', 'azure_openai', 'groq'])
-const groqStrictModels = new Set(['openai/gpt-oss-20b', 'openai/gpt-oss-120b'])
 const appUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
 
 const uniqueModels = (models: CatalogModel[]) => {
@@ -148,9 +148,9 @@ async function fetchGroqCatalog(secret: string) {
   const payload = await response.json() as GroqModelsResponse
   const chatModels = (payload.data ?? []).flatMap(row => {
     const id = row.id?.trim()
-    if (!id || row.active === false || !groqStrictModels.has(id)) return []
-    const name = id === 'openai/gpt-oss-20b' ? 'GPT-OSS 20B' : id === 'openai/gpt-oss-120b' ? 'GPT-OSS 120B' : id
-    return [{ id, name, free: false, contextLength: row.context_window ?? 131072, structured: true } satisfies CatalogModel]
+    if (!id || row.active === false || !GROQ_AGENT_STRICT_MODELS.has(id)) return []
+    const meta = GROQ_FREE_PLAN_BY_ID.get(id)
+    return [{ id, name: meta?.name ?? id, free: Boolean(meta), contextLength: row.context_window ?? 131072, structured: true } satisfies CatalogModel]
   })
   return { chatModels: sortModels(chatModels), embeddingModels: [] as CatalogModel[] }
 }
