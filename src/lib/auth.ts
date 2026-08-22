@@ -17,7 +17,6 @@ const appBaseUrl=()=>{
 }
 
 export const resetPassword=(email:string)=>supabase.auth.resetPasswordForEmail(email,{ redirectTo: `${appBaseUrl()}#reset-password` })
-export const updatePassword=(password:string)=>supabase.auth.updateUser({ password })
 
 async function establishRecoverySession(){
   const params=new URLSearchParams(location.hash.slice(1))
@@ -36,7 +35,8 @@ async function establishRecoverySession(){
   if(!data.session)throw new Error('Password recovery session is missing or expired. Request a new reset link.')
 }
 
-export const updateRecoveryPassword=async(password:string)=>{
-  await establishRecoverySession()
+export const updatePassword=async(password:string)=>{
+  const params=new URLSearchParams(location.hash.slice(1))
+  if(params.get('type')==='recovery'||location.hash==='#reset-password')await establishRecoverySession()
   return supabase.auth.updateUser({password})
 }
