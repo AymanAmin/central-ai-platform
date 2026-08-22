@@ -2,13 +2,18 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient } from '../_shared/runtime.ts'
 
 type JsonObject=Record<string,unknown>
-interface Body{visitorId?:string;conversationId?:string}
+interface Body{visitorId?:string;conversationId?:string;limit?:number;before?:string}
 interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_provider:string|null;generation_voice:string|null;created_at:string;url?:string|null}
 const PENDING_TTS_WINDOW_MS=120_000
+const DEFAULT_PAGE_SIZE=20
+const MAX_PAGE_SIZE=50
+const PAGINATION_BUFFER=8
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const normalizeAssistantText=(value:string)=>value.replace(/\\r\\n/g,'\n').replace(/\\n/g,'\n').replace(/\\t/g,' ').replace(/\*\*([^*\n]+)\*\*/g,'$1').replace(/__([^_\n]+)__/g,'$1').replace(/`([^`\n]+)`/g,'$1').replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm,'').replace(/^[ \t]*[-*][ \t]+/gm,'• ').replace(/\n{3,}/g,'\n\n').trim()
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
+const pageSize=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.max(5,Math.min(MAX_PAGE_SIZE,Math.floor(value))):DEFAULT_PAGE_SIZE
+const validBefore=(value:string)=>!value||Number.isFinite(Date.parse(value))
 
 Deno.serve(async(req:Request)=>{
   const origin=req.headers.get('origin')??''
@@ -25,12 +30,14 @@ Deno.serve(async(req:Request)=>{
     const allowed=Array.isArray(widget.allowed_origins)?widget.allowed_origins.filter((value):value is string=>typeof value==='string'):[]
     if(!allowed.includes(origin))return send(origin,{success:false,error:'widget_origin_not_allowed'},403)
     const body=await req.json() as Body
-    const visitorId=clean(body.visitorId,160),conversationId=clean(body.conversationId,160)
-    if(!visitorId||!conversationId)return send(origin,{success:false,error:'invalid_request'},400)
+    const visitorId=clean(body.visitorId,160),conversationId=clean(body.conversationId,160),before=clean(body.before,64)
+    const limit=pageSize(body.limit)
+    if(!visitorId||!conversationId||!validBefore(before))return send(origin,{success:false,error:'invalid_request'},400)
 
+    const empty={success:true,exists:false,conversationId,status:'new',humanTakeover:false,messages:[],hasMore:false,nextBefore:null}
     const customerResult=await admin.from('customers').select('id').eq('organization_id',widget.organization_id).eq('external_customer_id',`web:${widget.id}:${visitorId}`).maybeSingle()
     if(customerResult.error)return send(origin,{success:false,error:'customer_lookup_failed'},500)
-    if(!customerResult.data)return send(origin,{success:true,exists:false,conversationId,status:'new',humanTakeover:false,messages:[]})
+    if(!customerResult.data)return send(origin,empty)
 
     const selectConversation='id,status,human_takeover,assigned_user_id,external_conversation_id'
     const exact=await admin.from('conversations').select(selectConversation).eq('organization_id',widget.organization_id).eq('customer_id',customerResult.data.id).eq('external_conversation_id',`web:${widget.id}:${conversationId}`).maybeSingle()
@@ -41,11 +48,14 @@ Deno.serve(async(req:Request)=>{
       if(latest.error)return send(origin,{success:false,error:'conversation_lookup_failed'},500)
       conversation=latest.data
     }
-    if(!conversation)return send(origin,{success:true,exists:false,conversationId,status:'new',humanTakeover:false,messages:[]})
+    if(!conversation)return send(origin,empty)
 
     const prefix=`web:${widget.id}:`
     const resumedConversationId=conversation.external_conversation_id.startsWith(prefix)?conversation.external_conversation_id.slice(prefix.length):conversationId
-    const messageResult=await admin.from('messages').select('id,role,direction,message_type,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant']).order('created_at',{ascending:true}).limit(200)
+    let messageQuery=admin.from('messages').select('id,role,direction,message_type,content,content_json,created_at').eq('organization_id',widget.organization_id).eq('conversation_id',conversation.id).in('role',['user','assistant'])
+    if(before)messageQuery=messageQuery.lt('created_at',before)
+    const fetchLimit=limit+PAGINATION_BUFFER+1
+    const messageResult=await messageQuery.order('created_at',{ascending:false}).limit(fetchLimit)
     if(messageResult.error)return send(origin,{success:false,error:'message_lookup_failed'},500)
     const rows=(messageResult.data??[]).filter(row=>typeof row.content==='string'&&row.content.length>0)
     const ids=rows.map(row=>row.id)
@@ -71,14 +81,17 @@ Deno.serve(async(req:Request)=>{
         audioByMessage.set(row.message_id,audio)
       }))
     }
-    const visibleRows=rows.filter(row=>!(row.role==='assistant'&&pendingTtsMessageIds.has(row.id)))
-    const messages=visibleRows.map(row=>{
+    const visibleDescending=rows.filter(row=>!(row.role==='assistant'&&pendingTtsMessageIds.has(row.id)))
+    const selectedDescending=visibleDescending.slice(0,limit)
+    const hasMore=visibleDescending.length>limit||rows.length===fetchLimit
+    const oldestSelected=selectedDescending[selectedDescending.length-1]
+    const messages=selectedDescending.reverse().map(row=>{
       const contentJson=(row.content_json??{}) as JsonObject
       const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
       const audio=audioByMessage.get(row.id)
       const text=source==='ai'?normalizeAssistantText(row.content):row.content
       return{id:row.id,role:row.role==='user'?'user':'assistant',text,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceInput:row.role==='user'&&row.message_type==='audio',audio:audio?{source:audio.audio_source,url:audio.url??null,mimeType:audio.mime_type,durationMs:Number(audio.duration_ms??0),stored:Boolean(audio.original_audio_stored),voiceName:audio.generation_voice}:null}
     })
-    return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
+    return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages,hasMore,nextBefore:hasMore&&oldestSelected?oldestSelected.created_at:null})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
 })
