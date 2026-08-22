@@ -36,6 +36,20 @@ function extractContent(payload: GroqChatResponse): string {
   throw new Error('groq_output_missing')
 }
 
+export function normalizeGroqText(value: string) {
+  return value
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, ' ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*[-*][ \t]+/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function safeProviderDetail(value: unknown) {
   if (typeof value !== 'string') return ''
   return value.replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7E\u0600-\u06FF]/g, '').trim().slice(0, 280)
@@ -118,7 +132,7 @@ export class GroqProvider implements AiProvider {
       input.userInput,
       input.maxOutputTokens,
     )
-    return { ...result.value, inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+    return { ...result.value, answer: normalizeGroqText(result.value.answer), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
   }
 
   async chatWithTools(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiToolPlanResult> {
@@ -139,12 +153,12 @@ export class GroqProvider implements AiProvider {
       input.userInput,
       input.maxOutputTokens,
     )
-    return { ...result.value, inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+    return { ...result.value, answer: normalizeGroqText(result.value.answer), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
   }
 
   async text(instructions: string, input: string, maxOutputTokens = 500): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const result = await this.completion<string>(null, 'central_ai_text', instructions, input, maxOutputTokens)
-    return { text: result.value.trim(), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+    return { text: normalizeGroqText(result.value), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
   }
 }
 
