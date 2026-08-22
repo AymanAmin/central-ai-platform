@@ -357,50 +357,50 @@
   .admin-modal:has(.agent-editor) .agent-form-grid .span-2{grid-column:auto}
   .admin-modal:has(.agent-editor) .agent-editor-section{padding:12px}
   .admin-modal:has(.agent-editor) .agent-test-bar{align-items:stretch}
+
+  /* Mobile card labels — bilingual without changing feature markup. */
+  .shell[dir="rtl"] .screen-organizations .data-table td:nth-child(1)::before{content:"الاسم"}
+  .shell[dir="rtl"] .screen-organizations .data-table td:nth-child(2)::before{content:"الكود"}
+  .shell[dir="rtl"] .screen-organizations .data-table td:nth-child(3)::before{content:"اللغة"}
+  .shell[dir="rtl"] .screen-organizations .data-table td:nth-child(4)::before{content:"الحالة"}
+  .shell[dir="ltr"] .screen-organizations .data-table td:nth-child(1)::before{content:"Name"}
+  .shell[dir="ltr"] .screen-organizations .data-table td:nth-child(2)::before{content:"Code"}
+  .shell[dir="ltr"] .screen-organizations .data-table td:nth-child(3)::before{content:"Language"}
+  .shell[dir="ltr"] .screen-organizations .data-table td:nth-child(4)::before{content:"Status"}
+
+  .shell[dir="rtl"] .screen-users .data-table td:nth-child(1)::before{content:"الاسم"}
+  .shell[dir="rtl"] .screen-users .data-table td:nth-child(2)::before{content:"البريد"}
+  .shell[dir="rtl"] .screen-users .data-table td:nth-child(3)::before{content:"الدور"}
+  .shell[dir="rtl"] .screen-users .data-table td:nth-child(4)::before{content:"الحالة"}
+  .shell[dir="ltr"] .screen-users .data-table td:nth-child(1)::before{content:"Name"}
+  .shell[dir="ltr"] .screen-users .data-table td:nth-child(2)::before{content:"Email"}
+  .shell[dir="ltr"] .screen-users .data-table td:nth-child(3)::before{content:"Role"}
+  .shell[dir="ltr"] .screen-users .data-table td:nth-child(4)::before{content:"Status"}
+
+  .shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(1)::before{content:"الاسم"}
+  .shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(2)::before{content:"الكود"}
+  .shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(3)::before{content:"بادئة المفتاح"}
+  .shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(4)::before{content:"حد الطلبات"}
+  .shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(5)::before{content:"الحالة"}
+  .shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(1)::before{content:"Name"}
+  .shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(2)::before{content:"Code"}
+  .shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(3)::before{content:"Key prefix"}
+  .shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(4)::before{content:"Rate limit"}
+  .shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(5)::before{content:"Status"}
+
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(1)::before{content:"الاسم"}
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(2)::before{content:"الطريقة"}
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(3)::before{content:"المتغيرات"}
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(4)::before{content:"نقطة الاتصال"}
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(5)::before{content:"المصادقة"}
+  .shell[dir="rtl"] .screen-tools .data-table td:nth-child(6)::before{content:"الحالة"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(1)::before{content:"Name"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(2)::before{content:"Method"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(3)::before{content:"Variables"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(4)::before{content:"Endpoint"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(5)::before{content:"Authentication"}
+  .shell[dir="ltr"] .screen-tools .data-table td:nth-child(6)::before{content:"Status"}
 }
-
-/* Mobile card labels — bilingual without changing feature markup. */
-.shell[dir="rtl"] .screen-organizations .data-table td:nth-child(1)::before{content:"الاسم"}
-.shell[dir="rtl"] .screen-organizations .data-table td:nth-child(2)::before{content:"الكود"}
-.shell[dir="rtl"] .screen-organizations .data-table td:nth-child(3)::before{content:"اللغة"}
-.shell[dir="rtl"] .screen-organizations .data-table td:nth-child(4)::before{content:"الحالة"}
-.shell[dir="ltr"] .screen-organizations .data-table td:nth-child(1)::before{content:"Name"}
-.shell[dir="ltr"] .screen-organizations .data-table td:nth-child(2)::before{content:"Code"}
-.shell[dir="ltr"] .screen-organizations .data-table td:nth-child(3)::before{content:"Language"}
-.shell[dir="ltr"] .screen-organizations .data-table td:nth-child(4)::before{content:"Status"}
-
-.shell[dir="rtl"] .screen-users .data-table td:nth-child(1)::before{content:"الاسم"}
-.shell[dir="rtl"] .screen-users .data-table td:nth-child(2)::before{content:"البريد"}
-.shell[dir="rtl"] .screen-users .data-table td:nth-child(3)::before{content:"الدور"}
-.shell[dir="rtl"] .screen-users .data-table td:nth-child(4)::before{content:"الحالة"}
-.shell[dir="ltr"] .screen-users .data-table td:nth-child(1)::before{content:"Name"}
-.shell[dir="ltr"] .screen-users .data-table td:nth-child(2)::before{content:"Email"}
-.shell[dir="ltr"] .screen-users .data-table td:nth-child(3)::before{content:"Role"}
-.shell[dir="ltr"] .screen-users .data-table td:nth-child(4)::before{content:"Status"}
-
-.shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(1)::before{content:"الاسم"}
-.shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(2)::before{content:"الكود"}
-.shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(3)::before{content:"بادئة المفتاح"}
-.shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(4)::before{content:"حد الطلبات"}
-.shell[dir="rtl"] .screen-api-clients .data-table td:nth-child(5)::before{content:"الحالة"}
-.shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(1)::before{content:"Name"}
-.shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(2)::before{content:"Code"}
-.shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(3)::before{content:"Key prefix"}
-.shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(4)::before{content:"Rate limit"}
-.shell[dir="ltr"] .screen-api-clients .data-table td:nth-child(5)::before{content:"Status"}
-
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(1)::before{content:"الاسم"}
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(2)::before{content:"الطريقة"}
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(3)::before{content:"المتغيرات"}
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(4)::before{content:"نقطة الاتصال"}
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(5)::before{content:"المصادقة"}
-.shell[dir="rtl"] .screen-tools .data-table td:nth-child(6)::before{content:"الحالة"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(1)::before{content:"Name"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(2)::before{content:"Method"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(3)::before{content:"Variables"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(4)::before{content:"Endpoint"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(5)::before{content:"Authentication"}
-.shell[dir="ltr"] .screen-tools .data-table td:nth-child(6)::before{content:"Status"}
 
 @media(max-width:480px){
   .screen-organizations .card,
