@@ -27,60 +27,12 @@ type PromptOptimization = {
 }
 
 const profiles: Record<string, PromptBudgetProfile> = {
-  groq: {
-    customerProfileChars: 360,
-    summaryChars: 600,
-    recentChars: 650,
-    knowledgeChars: 1800,
-    currentMessageChars: 1200,
-    toolsChars: 700,
-    genericInputChars: 6500,
-  },
-  gemini: {
-    customerProfileChars: 600,
-    summaryChars: 1000,
-    recentChars: 1400,
-    knowledgeChars: 4200,
-    currentMessageChars: 1800,
-    toolsChars: 1400,
-    genericInputChars: 10_000,
-  },
-  openai: {
-    customerProfileChars: 600,
-    summaryChars: 1000,
-    recentChars: 1400,
-    knowledgeChars: 4200,
-    currentMessageChars: 1800,
-    toolsChars: 1400,
-    genericInputChars: 10_000,
-  },
-  azure_openai: {
-    customerProfileChars: 600,
-    summaryChars: 1000,
-    recentChars: 1400,
-    knowledgeChars: 4200,
-    currentMessageChars: 1800,
-    toolsChars: 1400,
-    genericInputChars: 10_000,
-  },
-  openrouter: {
-    customerProfileChars: 500,
-    summaryChars: 900,
-    recentChars: 1200,
-    knowledgeChars: 3500,
-    currentMessageChars: 1600,
-    toolsChars: 1200,
-    genericInputChars: 8500,
-  },
-  cloudflare: {
-    customerProfileChars: 450,
-    summaryChars: 800,
-    recentChars: 1000,
-    knowledgeChars: 3000,
-    currentMessageChars: 1400,
-    toolsChars: 1000,
-    genericInputChars: 7500,
-  },
+  groq: { customerProfileChars: 360, summaryChars: 600, recentChars: 650, knowledgeChars: 1800, currentMessageChars: 1200, toolsChars: 700, genericInputChars: 6500 },
+  gemini: { customerProfileChars: 600, summaryChars: 1000, recentChars: 1400, knowledgeChars: 4200, currentMessageChars: 1800, toolsChars: 1400, genericInputChars: 10_000 },
+  openai: { customerProfileChars: 600, summaryChars: 1000, recentChars: 1400, knowledgeChars: 4200, currentMessageChars: 1800, toolsChars: 1400, genericInputChars: 10_000 },
+  azure_openai: { customerProfileChars: 600, summaryChars: 1000, recentChars: 1400, knowledgeChars: 4200, currentMessageChars: 1800, toolsChars: 1400, genericInputChars: 10_000 },
+  openrouter: { customerProfileChars: 500, summaryChars: 900, recentChars: 1200, knowledgeChars: 3500, currentMessageChars: 1600, toolsChars: 1200, genericInputChars: 8500 },
+  cloudflare: { customerProfileChars: 450, summaryChars: 800, recentChars: 1000, knowledgeChars: 3000, currentMessageChars: 1400, toolsChars: 1000, genericInputChars: 7500 },
 }
 
 const defaultProfile: PromptBudgetProfile = {
@@ -142,9 +94,20 @@ const normalizeTerms = (value: string) => {
   return new Set(normalized.split(/\s+/).filter(term => term.length >= 3))
 }
 
+const termsRelated = (left: string, right: string) => {
+  if (left === right) return true
+  const shorter = left.length <= right.length ? left : right
+  const longer = left.length > right.length ? left : right
+  return shorter.length >= 4 && longer.startsWith(shorter)
+}
+
 const overlapCount = (left: Set<string>, right: Set<string>) => {
   let count = 0
-  for (const term of left) if (right.has(term)) count += 1
+  for (const leftTerm of left) {
+    for (const rightTerm of right) {
+      if (termsRelated(leftTerm, rightTerm)) { count += 1; break }
+    }
+  }
   return count
 }
 
@@ -158,13 +121,7 @@ const parameterLike = (value: string) => {
 function extractRuntimeSections(userInput: string) {
   const match = userInput.match(runtimePattern)
   if (!match) return null
-  return {
-    profile: match[1] ?? '',
-    summary: match[2] ?? '',
-    recent: match[3] ?? '',
-    knowledge: match[4] ?? '',
-    current: match[5] ?? '',
-  }
+  return { profile: match[1] ?? '', summary: match[2] ?? '', recent: match[3] ?? '', knowledge: match[4] ?? '', current: match[5] ?? '' }
 }
 
 function selectRelevantToolLines(toolText: string, currentMessage: string, recent: string) {
@@ -188,16 +145,9 @@ function optimizeInstructions(instructions: string, currentMessage: string, rece
   if (!toolMode || rawTools === '(none)') return { instructions: `${prefix}(none)`, useTools: false, toolsBefore: 0, toolsAfter: 0 }
 
   const relevant = selectRelevantToolLines(rawTools, currentMessage, recent)
-  if (!relevant.lines.length) {
-    return { instructions: `${prefix}(none)`, useTools: false, toolsBefore: relevant.before, toolsAfter: 0 }
-  }
+  if (!relevant.lines.length) return { instructions: `${prefix}(none)`, useTools: false, toolsBefore: relevant.before, toolsAfter: 0 }
   const compactedTools = compactHeadTail(relevant.lines.join('\n').replace(/[ \t]+/g, ' '), profile.toolsChars)
-  return {
-    instructions: `${prefix}${compactedTools}`,
-    useTools: true,
-    toolsBefore: relevant.before,
-    toolsAfter: relevant.lines.length,
-  }
+  return { instructions: `${prefix}${compactedTools}`, useTools: true, toolsBefore: relevant.before, toolsAfter: relevant.lines.length }
 }
 
 export function estimatePromptTokens(value: string) {
@@ -240,27 +190,18 @@ export function optimizeRuntimePrompt(provider: string, model: string, instructi
     console.info('prompt_budget_applied', { provider, model, ...stats })
   }
 
-  return {
-    instructions: instructionOptimization.instructions,
-    userInput: optimizedInput,
-    useTools: instructionOptimization.useTools,
-    stats,
-  }
+  return { instructions: instructionOptimization.instructions, userInput: optimizedInput, useTools: instructionOptimization.useTools, stats }
 }
 
 export class PromptBudgetProvider implements AiProvider {
   readonly provider: string
 
-  constructor(private inner: AiProvider) {
-    this.provider = inner.provider
-  }
+  constructor(private inner: AiProvider) { this.provider = inner.provider }
 
   get chatModel() { return this.inner.chatModel }
   get embeddingModel() { return this.inner.embeddingModel }
 
-  embedding(texts: string[], task?: EmbeddingTask): Promise<EmbeddingResult> {
-    return this.inner.embedding(texts, task)
-  }
+  embedding(texts: string[], task?: EmbeddingTask): Promise<EmbeddingResult> { return this.inner.embedding(texts, task) }
 
   async chat(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiChatResult> {
     const optimized = optimizeRuntimePrompt(this.provider, this.chatModel, input.instructions, input.userInput, false)
