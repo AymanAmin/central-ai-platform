@@ -34,9 +34,10 @@ export function integrationSnippet(language:CodeLanguage,payload:Record<string,u
 
 const result = await response.json()
 console.log(result)`
-  if(language==='python')return `import requests
+  if(language==='python')return `import json
+import requests
 
-payload = ${body.replace(/\btrue\b/g,'True').replace(/\bfalse\b/g,'False').replace(/\bnull\b/g,'None')}
+payload = json.loads(${JSON.stringify(body)})
 response = requests.post(
     '${integrationEndpoint}',
     headers={
