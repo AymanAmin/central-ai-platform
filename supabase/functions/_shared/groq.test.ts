@@ -109,6 +109,51 @@ Deno.test('Groq retries once when generated JSON misses the expected schema', as
   }
 })
 
+Deno.test('Groq switches to the other free strict model when the selected model returns 429', async () => {
+  const originalFetch = globalThis.fetch
+  const models: string[] = []
+  try {
+    globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
+      models.push(body.model ?? '')
+      if (body.model === 'openai/gpt-oss-20b') {
+        return new Response(JSON.stringify({ error: { message: 'Rate limit reached for model' } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60' } })
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ answer: 'Fallback worked', intent: 'test', requestHuman: false, actions: [] }) } }],
+        usage: { prompt_tokens: 13, completion_tokens: 6 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+
+    const settings = { chat_model: 'openai/gpt-oss-20b', embedding_model: 'gemini-embedding-001' }
+    const provider = createGroqProvider(settings, 'gsk_123456789012345678901234567890')
+    const result = await provider.chat({ instructions: 'Return JSON.', userInput: 'test', maxOutputTokens: 512 })
+    assertEquals(models, ['openai/gpt-oss-20b', 'openai/gpt-oss-120b'])
+    assertEquals(result.answer, 'Fallback worked')
+    assertEquals(provider.chatModel, 'openai/gpt-oss-120b')
+    assertEquals(settings.chat_model, 'openai/gpt-oss-120b')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+Deno.test('Groq surfaces 429 after both free strict models are exhausted', async () => {
+  const originalFetch = globalThis.fetch
+  const models: string[] = []
+  try {
+    globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
+      models.push(body.model ?? '')
+      return new Response(JSON.stringify({ error: { message: `Rate limit reached for ${body.model}` } }), { status: 429, headers: { 'content-type': 'application/json' } })
+    }
+    const provider = new GroqProvider('gsk_123456789012345678901234567890', 'openai/gpt-oss-120b', 'gemini-embedding-001')
+    await assertRejectsCode(provider.chat({ instructions: 'Return JSON.', userInput: 'test', maxOutputTokens: 512 }), 'chat_provider_error:429:Rate limit reached for openai/gpt-oss-20b')
+    assertEquals(models, ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 Deno.test('Groq provider surfaces a sanitized non-schema provider 400 message without retry', async () => {
   const originalFetch = globalThis.fetch
   let calls = 0
