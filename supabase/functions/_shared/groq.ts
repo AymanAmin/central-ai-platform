@@ -1,4 +1,5 @@
 import type { AiAction, AiChatResult, AiProvider, AiToolPlanResult, EmbeddingResult, EmbeddingTask } from './ai.ts'
+import { groqAgentFallbackModels } from './groq-models.ts'
 
 interface GroqChatResponse {
   choices?: Array<{ message?: { content?: string | null } }>
@@ -95,11 +96,28 @@ async function providerError(response: Response) {
 
 export class GroqProvider implements AiProvider {
   readonly provider = 'groq'
+  private activeChatModel: string
 
-  constructor(private key: string, readonly chatModel: string, readonly embeddingModel: string) {}
+  constructor(
+    private key: string,
+    chatModel: string,
+    readonly embeddingModel: string,
+    private onModelUsed?: (model: string) => void,
+  ) {
+    this.activeChatModel = chatModel
+  }
+
+  get chatModel() {
+    return this.activeChatModel
+  }
 
   async embedding(_texts: string[], _task?: EmbeddingTask): Promise<EmbeddingResult> {
     throw new Error('groq_embeddings_not_supported')
+  }
+
+  private useModel(model: string) {
+    this.activeChatModel = model
+    this.onModelUsed?.(model)
   }
 
   private async completion<T>(
@@ -109,14 +127,14 @@ export class GroqProvider implements AiProvider {
     input: string,
     maxOutputTokens: number,
   ): Promise<{ value: T; inputTokens: number; outputTokens: number }> {
-    const run = async (repair = false) => {
+    const run = async (model: string, repair = false) => {
       const messages = [
         { role: 'system', content: schema ? `${instructions}\n\n${actionContract}` : instructions },
         ...(repair ? [{ role: 'system', content: schemaRepairInstruction }] : []),
         { role: 'user', content: input },
       ]
       const body: Record<string, unknown> = {
-        model: this.chatModel,
+        model,
         messages,
         max_completion_tokens: maxOutputTokens,
         temperature: repair ? 0 : 0.2,
@@ -141,22 +159,41 @@ export class GroqProvider implements AiProvider {
       return { response, body }
     }
 
-    let attempt = await run(false)
-    if (!attempt.response.ok) {
-      const firstError = await providerError(attempt.response)
-      const schemaMismatch = Boolean(schema) && attempt.response.status === 400 && firstError.detail.includes('Generated JSON does not match the expected schema')
-      if (!schemaMismatch) throw new Error(firstError.message)
-      attempt = await run(true)
-      if (!attempt.response.ok) throw new Error((await providerError(attempt.response)).message)
+    let lastRateLimitError = 'chat_provider_error:429'
+    for (const model of groqAgentFallbackModels(this.activeChatModel)) {
+      let attempt = await run(model, false)
+      if (!attempt.response.ok) {
+        const firstError = await providerError(attempt.response)
+        if (attempt.response.status === 429) {
+          lastRateLimitError = firstError.message
+          console.warn('groq_model_rate_limited_trying_next_free_model', { model })
+          continue
+        }
+        const schemaMismatch = Boolean(schema) && attempt.response.status === 400 && firstError.detail.includes('Generated JSON does not match the expected schema')
+        if (!schemaMismatch) throw new Error(firstError.message)
+        attempt = await run(model, true)
+        if (!attempt.response.ok) {
+          const retryError = await providerError(attempt.response)
+          if (attempt.response.status === 429) {
+            lastRateLimitError = retryError.message
+            console.warn('groq_model_rate_limited_after_schema_retry', { model })
+            continue
+          }
+          throw new Error(retryError.message)
+        }
+      }
+
+      const payload = await attempt.response.json() as GroqChatResponse
+      const text = extractContent(payload)
+      this.useModel(model)
+      return {
+        value: (schema ? JSON.parse(text) : text) as T,
+        inputTokens: payload.usage?.prompt_tokens ?? 0,
+        outputTokens: payload.usage?.completion_tokens ?? 0,
+      }
     }
 
-    const payload = await attempt.response.json() as GroqChatResponse
-    const text = extractContent(payload)
-    return {
-      value: (schema ? JSON.parse(text) : text) as T,
-      inputTokens: payload.usage?.prompt_tokens ?? 0,
-      outputTokens: payload.usage?.completion_tokens ?? 0,
-    }
+    throw new Error(lastRateLimitError)
   }
 
   async chat(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiChatResult> {
@@ -219,5 +256,5 @@ export function createGroqProvider(settings: { chat_model: string; embedding_mod
   const key = secret?.trim() || Deno.env.get('GROQ_API_KEY')?.trim() || ''
   if (!key) throw new Error('groq_api_key_missing')
   if (key.length < 20 || key.length > 512) throw new Error('groq_api_key_invalid')
-  return new GroqProvider(key, settings.chat_model, settings.embedding_model)
+  return new GroqProvider(key, settings.chat_model, settings.embedding_model, model => { settings.chat_model = model })
 }
