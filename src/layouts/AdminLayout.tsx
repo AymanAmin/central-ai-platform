@@ -101,9 +101,9 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
 
     <aside id="app-sidebar" className={`sidebar${menuOpen?' open':''}`} aria-label={tr('القائمة الرئيسية','Main navigation')}>
       <div className="sidebar-header">
-        <div className="brand" aria-label="Central AI Platform">
+        <div className="brand" aria-label={tr('منصة الذكاء الاصطناعي المركزية','Central AI Platform')}>
           <span className="brand-signal" aria-hidden="true"><i/><i/><i/></span>
-          <span className="brand-copy"><strong>Central AI</strong><small>{tr('منصة التحكم','Control Plane')}</small></span>
+          <span className="brand-copy"><strong>{tr('الذكاء الاصطناعي المركزي','Central AI')}</strong><small>{tr('منصة التحكم','Control Plane')}</small></span>
         </div>
         <button className="sidebar-close" type="button" aria-label={tr('إغلاق القائمة','Close menu')} onClick={()=>setMenuOpen(false)}>×</button>
       </div>
@@ -127,7 +127,7 @@ export function AdminLayout({profile,page,onNavigate,children}:{profile:Profile;
 
     <div className="workspace">
       <div className="workspace-bar">
-        <div className="workspace-title"><span className="workspace-mark" aria-hidden="true"/>Central AI Platform</div>
+        <div className="workspace-title"><span className="workspace-mark" aria-hidden="true"/>{tr('منصة الذكاء الاصطناعي المركزية','Central AI Platform')}</div>
         <div className="workspace-model"><span>{tr('التشغيل','Runtime')}</span><strong>{profile.role==='SUPER_ADMIN'?tr('توجيه متعدد النماذج','Multi-model routing'):tr('وكيل الجهة','Organization agent')}</strong></div>
       </div>
       <main className="main">{children}</main>
