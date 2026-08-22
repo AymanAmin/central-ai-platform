@@ -1,7 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 
-type Provider = 'gemini' | 'openrouter' | 'openai' | 'azure_openai'
+type Provider = 'gemini' | 'openrouter' | 'openai' | 'azure_openai' | 'groq'
 type CatalogModel = {
   id: string
   name: string
@@ -27,8 +27,11 @@ type OpenRouterModel = {
   pricing?: { prompt?: string; completion?: string }
 }
 type OpenRouterModelsResponse = { data?: OpenRouterModel[] }
+type GroqModel = { id?: string; active?: boolean; context_window?: number }
+type GroqModelsResponse = { data?: GroqModel[] }
 
-const allowedProviders = new Set<Provider>(['gemini', 'openrouter', 'openai', 'azure_openai'])
+const allowedProviders = new Set<Provider>(['gemini', 'openrouter', 'openai', 'azure_openai', 'groq'])
+const groqStrictModels = new Set(['openai/gpt-oss-20b', 'openai/gpt-oss-120b'])
 const appUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
 
 const uniqueModels = (models: CatalogModel[]) => {
@@ -136,6 +139,22 @@ async function fetchOpenRouterCatalog(secret: string) {
   return { chatModels: sortModels(chatModels), embeddingModels: sortModels(embeddingModels) }
 }
 
+async function fetchGroqCatalog(secret: string) {
+  const response = await fetch('https://api.groq.com/openai/v1/models', {
+    headers: { authorization: `Bearer ${secret}` },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!response.ok) throw new Error(`model_catalog_provider_error:${response.status}`)
+  const payload = await response.json() as GroqModelsResponse
+  const chatModels = (payload.data ?? []).flatMap(row => {
+    const id = row.id?.trim()
+    if (!id || row.active === false || !groqStrictModels.has(id)) return []
+    const name = id === 'openai/gpt-oss-20b' ? 'GPT-OSS 20B' : id === 'openai/gpt-oss-120b' ? 'GPT-OSS 120B' : id
+    return [{ id, name, free: false, contextLength: row.context_window ?? 131072, structured: true } satisfies CatalogModel]
+  })
+  return { chatModels: sortModels(chatModels), embeddingModels: [] as CatalogModel[] }
+}
+
 Deno.serve(async (req: Request) => {
   const cors = preflight(req)
   if (cors) return cors
@@ -188,10 +207,12 @@ Deno.serve(async (req: Request) => {
       ? await fetchGeminiCatalog(secret)
       : provider === 'openrouter'
         ? await fetchOpenRouterCatalog(secret)
-        : await fetchOpenAiCatalog(secret)
+        : provider === 'groq'
+          ? await fetchGroqCatalog(secret)
+          : await fetchOpenAiCatalog(secret)
 
     const chatModels = ensureModel(catalog.chatModels, setting.data.chat_model, true)
-    const embeddingModels = ensureModel(catalog.embeddingModels, setting.data.embedding_model, false)
+    const embeddingModels = provider === 'groq' ? [] : ensureModel(catalog.embeddingModels, setting.data.embedding_model, false)
     return json({
       success: true,
       provider,

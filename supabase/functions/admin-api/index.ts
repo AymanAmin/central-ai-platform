@@ -67,7 +67,7 @@ const sha256 = async (value: string) => {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 const inviteRedirectUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
-const allowedProviders = new Set(['gemini', 'openrouter', 'openai', 'azure_openai'])
+const allowedProviders = new Set(['gemini', 'openrouter', 'openai', 'azure_openai', 'groq'])
 const allowedEmbeddingProviders = new Set(['gemini', 'openrouter', 'openai'])
 const cleanModel = (value: string | undefined) => value?.trim().slice(0, 180) ?? ''
 const validateProvider = (value: string | undefined) => !!value && allowedProviders.has(value)
@@ -157,7 +157,9 @@ Deno.serve(async (req: Request) => {
       if (typeof secret.data !== 'string' || !secret.data.trim()) return json({ success: false, error: 'provider_secret_missing' }, 409)
       const ai = setting.data.provider === 'azure_openai'
         ? createAzureOpenAiProvider(setting.data, secret.data)
-        : createAiProvider(setting.data, secret.data)
+        : setting.data.provider === 'groq'
+          ? (await createRuntimeProvider(admin, setting.data.provider, setting.data.chat_model, setting.data.embedding_model)).ai
+          : createAiProvider(setting.data, secret.data)
       const started = performance.now()
       const test = await ai.chat({ instructions: 'You are a provider compatibility test. Return answer exactly OK, intent connection_test, requestHuman false, and no actions.', userInput: 'Connection test', maxOutputTokens: 128 })
       if (test.answer.trim().toUpperCase() !== 'OK' || test.requestHuman || test.actions.length) throw new Error('provider_structured_test_failed')

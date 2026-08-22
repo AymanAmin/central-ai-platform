@@ -1,6 +1,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { createAiProvider, type AiProvider, type AiProviderSettings } from './ai.ts'
 import { createAzureOpenAiProvider } from './azure-openai.ts'
+import { createGroqProvider } from './groq.ts'
 
 export interface OrganizationAgentRuntime {
   organization_id: string
@@ -92,14 +93,20 @@ export async function createRuntimeProvider(
   embeddingModel: string,
 ): Promise<{ settings: RuntimeProvider; ai: AiProvider }> {
   const settings = await runtimeProvider(admin, provider, chatModel, embeddingModel)
-  if (provider === 'azure_openai') {
+  if (provider === 'azure_openai' || provider === 'groq') {
     let secret: string | null = null
     if (settings.id) {
       const secretResult = await admin.rpc('get_ai_provider_secret', { p_provider_setting_id: settings.id })
       if (secretResult.error) throw new Error('ai_provider_secret_lookup_failed')
       secret = typeof secretResult.data === 'string' && secretResult.data.trim() ? secretResult.data : null
     }
-    return { settings, ai: createAzureOpenAiProvider(settings, secret) }
+    if (provider === 'groq' && !secret && !Deno.env.get('GROQ_API_KEY')?.trim()) throw new Error('ai_provider_not_configured')
+    return {
+      settings,
+      ai: provider === 'azure_openai'
+        ? createAzureOpenAiProvider(settings, secret)
+        : createGroqProvider(settings, secret),
+    }
   }
   return { settings, ai: createAiProvider(settings) }
 }

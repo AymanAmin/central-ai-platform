@@ -43,6 +43,7 @@ const providerLabel = (provider: string) => {
   if (provider === 'openrouter') return 'OpenRouter'
   if (provider === 'openai') return 'OpenAI'
   if (provider === 'azure_openai') return 'Microsoft Azure OpenAI'
+  if (provider === 'groq') return 'Groq'
   return provider
 }
 
@@ -61,6 +62,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
 
   const selectedProvider = useMemo(() => providers.find(item => item.id === providerId) ?? providers.find(item => item.is_default) ?? null, [providers, providerId])
   const isAzureOpenAi = selectedProvider?.provider === 'azure_openai'
+  const isGroq = selectedProvider?.provider === 'groq'
 
   useEffect(() => {
     void supabase.from('organizations').select('*').then(r => setOrgs((r.data ?? []) as Organization[]))
@@ -188,6 +190,10 @@ export function AiSettings({ profile }: { profile: Profile }) {
           {tr('Azure OpenAI مخصص هنا كمسار محادثة احتياطي. سيبقى Gemini هو الافتراضي وGemini Embeddings هو مسار RAG. اسم النشر المتوقع حاليًا هو gpt-4.1-mini، ولن يُفعّل Azure تلقائيًا قبل نجاح الاختبار.', 'Azure OpenAI is configured here as a chat fallback. Gemini remains the default and Gemini Embeddings remains the RAG path. The expected deployment name is currently gpt-4.1-mini, and Azure is never activated automatically before a successful test.')}
         </div>}
 
+        {isGroq && <div className="notice">
+          {tr('Groq متاح للمحادثة والمسار الاحتياطي فقط. قاعدة المعرفة تستمر باستخدام مزود التضمين المحدد للجهة، لأن Groq API لا يوفّر Embeddings. تعرض المنصة موديلات Groq ذات Structured Output الصارم فقط لضمان ثبات استجابة JSON.', 'Groq is available for chat and fallback only. Knowledge retrieval keeps the organization’s configured embedding provider because the Groq API does not provide embeddings. The platform lists only Groq models with strict Structured Outputs to keep the JSON response contract reliable.')}
+        </div>}
+
         <form className="stack" onSubmit={saveProviderSecret} style={{ marginTop: 12 }}>
           {isAzureOpenAi && <label>{tr('Azure OpenAI Endpoint', 'Azure OpenAI endpoint')}
             <input
@@ -207,7 +213,7 @@ export function AiSettings({ profile }: { profile: Profile }) {
               autoComplete="new-password"
               value={providerSecret}
               onChange={e => setProviderSecret(e.target.value)}
-              placeholder={selectedProvider?.provider === 'openrouter' ? 'sk-or-v1-…' : selectedProvider?.provider === 'gemini' ? 'AIza…' : tr('أدخل المفتاح الجديد', 'Enter a new API key')}
+              placeholder={selectedProvider?.provider === 'openrouter' ? 'sk-or-v1-…' : selectedProvider?.provider === 'gemini' ? 'AIza…' : selectedProvider?.provider === 'groq' ? 'gsk_…' : tr('أدخل المفتاح الجديد', 'Enter a new API key')}
             />
             <FieldHint>{tr('يُرسل المفتاح عبر HTTPS إلى الخادم ويُخزن مشفرًا داخل Supabase Vault، ولا تتم إعادة عرضه.', 'The key is sent over HTTPS to the server, encrypted in Supabase Vault, and never displayed again.')}</FieldHint>
           </label>
