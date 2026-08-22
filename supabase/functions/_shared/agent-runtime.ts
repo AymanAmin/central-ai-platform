@@ -1,7 +1,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { createAiProvider, type AiProvider, type AiProviderSettings } from './ai.ts'
 import { createAzureOpenAiProvider } from './azure-openai.ts'
-import { createGroqProvider } from './groq.ts'
+import { createResilientGroqProvider } from './groq-resilient.ts'
 import { withPromptBudget } from './prompt-budget.ts'
 
 export interface OrganizationAgentRuntime {
@@ -106,7 +106,7 @@ export async function createRuntimeProvider(
     if (provider === 'groq' && !secret && !Deno.env.get('GROQ_API_KEY')?.trim()) throw new Error('ai_provider_not_configured')
     ai = provider === 'azure_openai'
       ? createAzureOpenAiProvider(settings, secret)
-      : createGroqProvider(settings, secret)
+      : createResilientGroqProvider(settings, secret)
   } else {
     ai = createAiProvider(settings)
   }
