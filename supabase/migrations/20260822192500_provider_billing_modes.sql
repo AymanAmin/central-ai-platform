@@ -119,6 +119,7 @@ end;
 $$;
 
 revoke all on function app_private.apply_usage_billing_mode() from public, anon, authenticated;
+grant execute on function app_private.apply_usage_billing_mode() to service_role;
 
 drop trigger if exists usage_logs_apply_billing_mode_before_insert on public.usage_logs;
 create trigger usage_logs_apply_billing_mode_before_insert
