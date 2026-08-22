@@ -1,7 +1,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 
-type Provider = 'gemini' | 'openrouter' | 'openai'
+type Provider = 'gemini' | 'openrouter' | 'openai' | 'azure_openai'
 type CatalogModel = {
   id: string
   name: string
@@ -28,7 +28,7 @@ type OpenRouterModel = {
 }
 type OpenRouterModelsResponse = { data?: OpenRouterModel[] }
 
-const allowedProviders = new Set<Provider>(['gemini', 'openrouter', 'openai'])
+const allowedProviders = new Set<Provider>(['gemini', 'openrouter', 'openai', 'azure_openai'])
 const appUrl = () => Deno.env.get('APP_URL')?.trim() || 'https://aymanamin.github.io/central-ai-platform/'
 
 const uniqueModels = (models: CatalogModel[]) => {
@@ -166,6 +166,18 @@ Deno.serve(async (req: Request) => {
       .maybeSingle()
     if (setting.error) throw setting.error
     if (!setting.data) return json({ success: false, error: 'provider_not_configured' }, 404)
+
+    if (provider === 'azure_openai') {
+      return json({
+        success: true,
+        provider,
+        defaultChatModel: setting.data.chat_model,
+        defaultEmbeddingModel: setting.data.embedding_model,
+        chatModels: ensureModel([], setting.data.chat_model, true),
+        embeddingModels: [],
+        refreshedAt: new Date().toISOString(),
+      })
+    }
 
     const secretResult = await admin.rpc('get_ai_provider_secret', { p_provider_setting_id: setting.data.id })
     if (secretResult.error) throw secretResult.error
