@@ -6,6 +6,7 @@ interface Body{visitorId?:string;conversationId?:string}
 interface AudioMeta{message_id:string;audio_source:string;storage_path:string|null;mime_type:string;duration_ms:number|null;original_audio_stored:boolean;generation_provider:string|null;generation_voice:string|null;created_at:string;url?:string|null}
 const PENDING_TTS_WINDOW_MS=120_000
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
+const normalizeAssistantText=(value:string)=>value.replace(/\\r\\n/g,'\n').replace(/\\n/g,'\n').replace(/\\t/g,' ').replace(/\*\*([^*\n]+)\*\*/g,'$1').replace(/__([^_\n]+)__/g,'$1').replace(/`([^`\n]+)`/g,'$1').replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm,'').replace(/^[ \t]*[-*][ \t]+/gm,'• ').replace(/\n{3,}/g,'\n\n').trim()
 const headers=(origin:string)=>({'content-type':'application/json; charset=utf-8','access-control-allow-origin':origin||'null','access-control-allow-methods':'POST,OPTIONS','access-control-allow-headers':'content-type,x-widget-key','access-control-max-age':'600','vary':'Origin','cache-control':'no-store'})
 const send=(origin:string,payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:headers(origin)})
 
@@ -75,7 +76,8 @@ Deno.serve(async(req:Request)=>{
       const contentJson=(row.content_json??{}) as JsonObject
       const source=contentJson.source==='human'?'human':row.role==='user'?'customer':'ai'
       const audio=audioByMessage.get(row.id)
-      return{id:row.id,role:row.role==='user'?'user':'assistant',text:row.content,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceInput:row.role==='user'&&row.message_type==='audio',audio:audio?{source:audio.audio_source,url:audio.url??null,mimeType:audio.mime_type,durationMs:Number(audio.duration_ms??0),stored:Boolean(audio.original_audio_stored),voiceName:audio.generation_voice}:null}
+      const text=source==='ai'?normalizeAssistantText(row.content):row.content
+      return{id:row.id,role:row.role==='user'?'user':'assistant',text,createdAt:row.created_at,source,agentName:typeof contentJson.agentName==='string'?contentJson.agentName:null,actions:Array.isArray(contentJson.actions)?contentJson.actions:[],voiceInput:row.role==='user'&&row.message_type==='audio',audio:audio?{source:audio.audio_source,url:audio.url??null,mimeType:audio.mime_type,durationMs:Number(audio.duration_ms??0),stored:Boolean(audio.original_audio_stored),voiceName:audio.generation_voice}:null}
     })
     return send(origin,{success:true,exists:true,conversationId:resumedConversationId,status:conversation.status,humanTakeover:conversation.human_takeover,assignedUserId:conversation.assigned_user_id,messages})
   }catch(error){return send(origin,{success:false,error:'widget_sync_failed',detail:error instanceof Error?error.message:undefined},500)}
