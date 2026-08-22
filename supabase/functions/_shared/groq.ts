@@ -37,8 +37,58 @@ const baseProperties = {
   actions: { type: 'array', items: actionSchema },
 }
 
-const actionContract = `For every action, return exactly these fields: type, label, target, value. Every field is required; use null when a field is unused. Put the URL in target for open_url/download_file, the phone number in target for call_phone, the screen identifier in target for open_screen, and the option/custom payload in value for reply_option/custom.`
+const actionContract = 'Actions require type,label,target,value; use null when unused. target carries URL, phone, or screen. value carries reply/custom payload.'
 const schemaRepairInstruction = `Schema repair: obey every required JSON field exactly. ${actionContract}`
+
+const groqRuntimeLimits = {
+  customerProfileChars: 360,
+  summaryChars: 600,
+  recentChars: 650,
+  knowledgeChars: 1800,
+  currentMessageChars: 1200,
+  toolsChars: 700,
+} as const
+
+const compactHeadTail = (value: string, maxChars: number) => {
+  const clean = value.trim()
+  if (clean.length <= maxChars) return clean
+  if (maxChars < 24) return clean.slice(0, maxChars)
+  const head = Math.ceil(maxChars * .68)
+  const tail = maxChars - head - 3
+  return `${clean.slice(0, head)}...${clean.slice(-tail)}`
+}
+
+const compactTail = (value: string, maxChars: number) => {
+  const clean = value.trim()
+  return clean.length <= maxChars ? clean : `...${clean.slice(-(maxChars - 3))}`
+}
+
+const compactKnowledge = (value: string, maxChars: number) => {
+  const clean = value.trim()
+  if (clean.length <= maxChars) return clean
+  const sources = clean.split(/(?=\[Source \d+ \|)/g).filter(Boolean)
+  if (sources.length <= 1) return compactHeadTail(clean, maxChars)
+  const selected = sources.slice(0, 2)
+  const separatorChars = (selected.length - 1) * 2
+  const perSource = Math.floor((maxChars - separatorChars) / selected.length)
+  return selected.map(source => compactHeadTail(source, perSource)).join('\n\n')
+}
+
+export function compactGroqRuntimeInput(value: string) {
+  const match = value.match(/^Customer profile:\n([\s\S]*?)\n\nConversation summary:\n([\s\S]*?)\n\nRecent messages:\n([\s\S]*?)\n\nRetrieved knowledge:\n([\s\S]*?)\n\nCurrent customer message:\n([\s\S]*)$/)
+  if (!match) return value
+  const [, profile, summary, recent, knowledge, current] = match
+  return `Customer profile:\n${compactHeadTail(profile, groqRuntimeLimits.customerProfileChars)}\n\nConversation summary:\n${compactHeadTail(summary, groqRuntimeLimits.summaryChars)}\n\nRecent messages:\n${compactTail(recent, groqRuntimeLimits.recentChars)}\n\nRetrieved knowledge:\n${compactKnowledge(knowledge, groqRuntimeLimits.knowledgeChars)}\n\nCurrent customer message:\n${compactHeadTail(current, groqRuntimeLimits.currentMessageChars)}`
+}
+
+export function compactGroqRuntimeInstructions(value: string) {
+  const marker = 'Available read-only tools:\n'
+  const index = value.indexOf(marker)
+  if (index < 0) return value
+  const prefix = value.slice(0, index + marker.length)
+  const tools = value.slice(index + marker.length).replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim()
+  return `${prefix}${compactHeadTail(tools, groqRuntimeLimits.toolsChars)}`
+}
 
 function extractContent(payload: GroqChatResponse): string {
   const content = payload.choices?.[0]?.message?.content
@@ -127,11 +177,22 @@ export class GroqProvider implements AiProvider {
     input: string,
     maxOutputTokens: number,
   ): Promise<{ value: T; inputTokens: number; outputTokens: number }> {
+    const optimizedInstructions = schema ? compactGroqRuntimeInstructions(instructions) : instructions
+    const optimizedInput = schema ? compactGroqRuntimeInput(input) : input
+    if (schema && (optimizedInstructions.length !== instructions.length || optimizedInput.length !== input.length)) {
+      console.info('groq_prompt_budget_applied', {
+        instructionsBeforeChars: instructions.length,
+        instructionsAfterChars: optimizedInstructions.length,
+        inputBeforeChars: input.length,
+        inputAfterChars: optimizedInput.length,
+      })
+    }
+
     const run = async (model: string, repair = false) => {
       const messages = [
-        { role: 'system', content: schema ? `${instructions}\n\n${actionContract}` : instructions },
+        { role: 'system', content: schema ? `${optimizedInstructions}\n\n${actionContract}` : optimizedInstructions },
         ...(repair ? [{ role: 'system', content: schemaRepairInstruction }] : []),
-        { role: 'user', content: input },
+        { role: 'user', content: optimizedInput },
       ]
       const body: Record<string, unknown> = {
         model,
