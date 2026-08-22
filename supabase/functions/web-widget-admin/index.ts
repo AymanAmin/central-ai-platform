@@ -4,6 +4,8 @@ import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
 type AppRole='SUPER_ADMIN'|'ORGANIZATION_ADMIN'|'KNOWLEDGE_MANAGER'|'SUPPORT_AGENT'|'VIEWER'
 type Position='bottom_right'|'bottom_left'
 type Action='create'|'update'|'set_active'
+type JsonObject=Record<string,unknown>
+type IntakeKey='firstName'|'lastName'|'phone'|'email'|'question'
 interface Body{
   action?:Action
   id?:string
@@ -24,9 +26,29 @@ interface Body{
   allowedOrigins?:string[]
   publicTestEnabled?:boolean
   rateLimitPerMinute?:number
+  intakeFields?:unknown
   isActive?:boolean
 }
 
+const intakeKeys:IntakeKey[]=['firstName','lastName','phone','email','question']
+const defaultIntake=()=>Object.fromEntries(intakeKeys.map(key=>[key,{visible:true,required:false}]))
+const normalizeIntake=(value:unknown)=>{
+  if(value===undefined)return defaultIntake()
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('invalid_widget_intake_fields')
+  const source=value as JsonObject
+  const unknown=Object.keys(source).filter(key=>!intakeKeys.includes(key as IntakeKey));if(unknown.length)throw new Error('invalid_widget_intake_fields')
+  const result=defaultIntake() as Record<IntakeKey,{visible:boolean;required:boolean}>
+  for(const key of intakeKeys){
+    const raw=source[key];if(raw===undefined)continue
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('invalid_widget_intake_fields')
+    const row=raw as JsonObject
+    if(row.visible!==undefined&&typeof row.visible!=='boolean')throw new Error('invalid_widget_intake_fields')
+    if(row.required!==undefined&&typeof row.required!=='boolean')throw new Error('invalid_widget_intake_fields')
+    const visible=row.visible===undefined?true:row.visible
+    result[key]={visible,required:visible&&row.required===true}
+  }
+  return result
+}
 const clean=(value:string|undefined,max=500)=>value?.trim().slice(0,max)??''
 const randomToken=(bytes=24)=>{
   const value=new Uint8Array(bytes);crypto.getRandomValues(value)
@@ -53,6 +75,7 @@ const normalizeSuggestions=(values:string[]|undefined)=>{
   if(result.length>6)throw new Error('too_many_widget_suggestions')
   return result
 }
+const widgetCapabilities=['chat','select_prompt_profile','select_knowledge_base','use_read_tools']
 
 Deno.serve(async(req:Request)=>{
   const cors=preflight(req);if(cors)return cors
@@ -78,21 +101,21 @@ Deno.serve(async(req:Request)=>{
       const organization=await admin.from('organizations').select('id,is_active').eq('id',org).single();if(organization.error||!organization.data?.is_active)return json({success:false,error:'organization_not_found_or_inactive'},404)
       const name=clean(body.name,120);if(!name)return json({success:false,error:'widget_name_required'},400)
       const promptId=body.promptProfileId??null,kbId=body.knowledgeBaseId??null;await validateScope(org,promptId,kbId)
-      const origins=normalizeOrigins(body.allowedOrigins);const suggestionsAr=normalizeSuggestions(body.suggestionsAr),suggestionsEn=normalizeSuggestions(body.suggestionsEn)
+      const origins=normalizeOrigins(body.allowedOrigins);const suggestionsAr=normalizeSuggestions(body.suggestionsAr),suggestionsEn=normalizeSuggestions(body.suggestionsEn);const intakeFields=normalizeIntake(body.intakeFields)
       const color=clean(body.primaryColor,7)||'#167D74';if(!/^#[0-9A-Fa-f]{6}$/.test(color))return json({success:false,error:'invalid_widget_color'},400)
       const position:Position=body.position==='bottom_left'?'bottom_left':'bottom_right'
       const rate=Math.min(300,Math.max(5,Math.round(body.rateLimitPerMinute??30)))
       const widgetId=crypto.randomUUID();const publicKey=`ai_widget_${randomToken(24)}`;const internalKey=`ai_live_${randomToken(32)}`
       const apiClientId=crypto.randomUUID();const code=`WIDGET_${widgetId.replace(/-/g,'').slice(0,18).toUpperCase()}`
       const hash=await sha256(internalKey)
-      const apiClient=await admin.from('api_clients').insert({id:apiClientId,organization_id:org,name:`Widget · ${name}`,code,api_key_hash:hash,api_key_prefix:internalKey.slice(0,16),is_active:true,rate_limit_per_minute:rate,capabilities:['chat','select_prompt_profile','select_knowledge_base'],allowed_ips:[]})
+      const apiClient=await admin.from('api_clients').insert({id:apiClientId,organization_id:org,name:`Widget · ${name}`,code,api_key_hash:hash,api_key_prefix:internalKey.slice(0,16),is_active:true,rate_limit_per_minute:rate,capabilities:widgetCapabilities,allowed_ips:[]})
       if(apiClient.error)return json({success:false,error:'widget_api_client_create_failed',detail:apiClient.error.message},400)
       const secret=await admin.rpc('create_web_widget_api_key',{p_widget_id:widgetId,p_secret:internalKey})
       if(secret.error||typeof secret.data!=='string'){await admin.from('api_clients').delete().eq('id',apiClientId);return json({success:false,error:'widget_secret_store_failed',detail:secret.error?.message},500)}
-      const row={id:widgetId,organization_id:org,api_client_id:apiClientId,prompt_profile_id:promptId,knowledge_base_id:kbId,name,public_key:publicKey,api_key_vault_ref:secret.data,title_ar:clean(body.titleAr,120)||'المساعد الذكي',title_en:clean(body.titleEn,120)||'AI Assistant',welcome_ar:clean(body.welcomeAr,600)||'مرحبًا، كيف يمكنني مساعدتك؟',welcome_en:clean(body.welcomeEn,600)||'Hello, how can I help you?',placeholder_ar:clean(body.placeholderAr,120)||'اكتب رسالتك…',placeholder_en:clean(body.placeholderEn,120)||'Type your message…',suggestions_ar:suggestionsAr,suggestions_en:suggestionsEn,primary_color:color,position,allowed_origins:origins,public_test_enabled:body.publicTestEnabled===true,is_active:true,created_by:actor.id}
+      const row={id:widgetId,organization_id:org,api_client_id:apiClientId,prompt_profile_id:promptId,knowledge_base_id:kbId,name,public_key:publicKey,api_key_vault_ref:secret.data,title_ar:clean(body.titleAr,120)||'المساعد الذكي',title_en:clean(body.titleEn,120)||'AI Assistant',welcome_ar:clean(body.welcomeAr,600)||'مرحبًا، كيف يمكنني مساعدتك؟',welcome_en:clean(body.welcomeEn,600)||'Hello, how can I help you?',placeholder_ar:clean(body.placeholderAr,120)||'اكتب رسالتك…',placeholder_en:clean(body.placeholderEn,120)||'Type your message…',suggestions_ar:suggestionsAr,suggestions_en:suggestionsEn,primary_color:color,position,allowed_origins:origins,public_test_enabled:body.publicTestEnabled===true,intake_fields:intakeFields,is_active:true,created_by:actor.id}
       const created=await admin.from('web_chat_widgets').insert(row).select('id,public_key').single()
       if(created.error){await admin.rpc('delete_web_widget_api_key',{p_ref:secret.data});await admin.from('api_clients').delete().eq('id',apiClientId);return json({success:false,error:'widget_create_failed',detail:created.error.message},400)}
-      await audit('Create Web Chat Widget',widgetId,org,{apiClientId,promptProfileId:promptId,knowledgeBaseId:kbId,publicTestEnabled:row.public_test_enabled})
+      await audit('Create Web Chat Widget',widgetId,org,{apiClientId,promptProfileId:promptId,knowledgeBaseId:kbId,publicTestEnabled:row.public_test_enabled,intakeFields})
       return json({success:true,id:widgetId,publicKey})
     }
 
@@ -116,14 +139,18 @@ Deno.serve(async(req:Request)=>{
       const origins=body.allowedOrigins===undefined?existing.allowed_origins:normalizeOrigins(body.allowedOrigins)
       const suggestionsAr=body.suggestionsAr===undefined?existing.suggestions_ar:normalizeSuggestions(body.suggestionsAr)
       const suggestionsEn=body.suggestionsEn===undefined?existing.suggestions_en:normalizeSuggestions(body.suggestionsEn)
+      const intakeFields=body.intakeFields===undefined?normalizeIntake(existing.intake_fields):normalizeIntake(body.intakeFields)
       const color=body.primaryColor===undefined?existing.primary_color:clean(body.primaryColor,7);if(!/^#[0-9A-Fa-f]{6}$/.test(color))return json({success:false,error:'invalid_widget_color'},400)
       const name=body.name===undefined?existing.name:clean(body.name,120);if(!name)return json({success:false,error:'widget_name_required'},400)
-      const patch={name,prompt_profile_id:promptId,knowledge_base_id:kbId,title_ar:body.titleAr===undefined?existing.title_ar:clean(body.titleAr,120),title_en:body.titleEn===undefined?existing.title_en:clean(body.titleEn,120),welcome_ar:body.welcomeAr===undefined?existing.welcome_ar:clean(body.welcomeAr,600),welcome_en:body.welcomeEn===undefined?existing.welcome_en:clean(body.welcomeEn,600),placeholder_ar:body.placeholderAr===undefined?existing.placeholder_ar:clean(body.placeholderAr,120),placeholder_en:body.placeholderEn===undefined?existing.placeholder_en:clean(body.placeholderEn,120),suggestions_ar:suggestionsAr,suggestions_en:suggestionsEn,primary_color:color,position:body.position??existing.position,allowed_origins:origins,public_test_enabled:body.publicTestEnabled??existing.public_test_enabled}
+      const patch={name,prompt_profile_id:promptId,knowledge_base_id:kbId,title_ar:body.titleAr===undefined?existing.title_ar:clean(body.titleAr,120),title_en:body.titleEn===undefined?existing.title_en:clean(body.titleEn,120),welcome_ar:body.welcomeAr===undefined?existing.welcome_ar:clean(body.welcomeAr,600),welcome_en:body.welcomeEn===undefined?existing.welcome_en:clean(body.welcomeEn,600),placeholder_ar:body.placeholderAr===undefined?existing.placeholder_ar:clean(body.placeholderAr,120),placeholder_en:body.placeholderEn===undefined?existing.placeholder_en:clean(body.placeholderEn,120),suggestions_ar:suggestionsAr,suggestions_en:suggestionsEn,primary_color:color,position:body.position??existing.position,allowed_origins:origins,public_test_enabled:body.publicTestEnabled??existing.public_test_enabled,intake_fields:intakeFields}
       const rate=body.rateLimitPerMinute===undefined?null:Math.min(300,Math.max(5,Math.round(body.rateLimitPerMinute)))
       const widgetUpdate=await admin.from('web_chat_widgets').update(patch).eq('id',body.id);if(widgetUpdate.error)return json({success:false,error:'widget_update_failed',detail:widgetUpdate.error.message},400)
-      const clientPatch:Record<string,unknown>={name:`Widget · ${name}`};if(rate!==null)clientPatch.rate_limit_per_minute=rate
+      const client=await admin.from('api_clients').select('capabilities').eq('id',existing.api_client_id).single()
+      if(client.error)return json({success:false,error:'widget_api_client_update_failed',detail:client.error.message},400)
+      const currentCapabilities=Array.isArray(client.data?.capabilities)?client.data.capabilities.filter((value):value is string=>typeof value==='string'):[]
+      const clientPatch:Record<string,unknown>={name:`Widget · ${name}`,capabilities:[...new Set([...currentCapabilities,...widgetCapabilities])]};if(rate!==null)clientPatch.rate_limit_per_minute=rate
       const clientUpdate=await admin.from('api_clients').update(clientPatch).eq('id',existing.api_client_id);if(clientUpdate.error)return json({success:false,error:'widget_api_client_update_failed',detail:clientUpdate.error.message},400)
-      await audit('Update Web Chat Widget',body.id,existing.organization_id,{promptProfileId:promptId,knowledgeBaseId:kbId,publicTestEnabled:patch.public_test_enabled})
+      await audit('Update Web Chat Widget',body.id,existing.organization_id,{promptProfileId:promptId,knowledgeBaseId:kbId,publicTestEnabled:patch.public_test_enabled,intakeFields})
       return json({success:true})
     }
 

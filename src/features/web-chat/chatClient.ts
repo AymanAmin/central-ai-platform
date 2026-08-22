@@ -1,4 +1,5 @@
 import { functionsBaseUrl } from '../../lib/supabase'
+import type { CustomerIntakeFields } from './intakeConfig'
 
 export interface WidgetDirectoryItem{
   key:string
@@ -21,11 +22,19 @@ export interface WidgetPublicConfig{
   primaryColor:string
   position:'bottom_right'|'bottom_left'
   publicTestEnabled:boolean
+  intakeFields:CustomerIntakeFields
   agentName:string|null
   voiceEnabled:boolean
   voiceReplyMode:'text_only'|'voice_for_voice'|'always_voice'
   maxVoiceSeconds:number
   organization:{nameAr:string;nameEn:string|null;defaultLanguage:string}
+}
+export interface WidgetCustomerInput{
+  firstName?:string
+  lastName?:string
+  name?:string
+  email?:string
+  phone?:string
 }
 export interface WidgetAudio{
   source?:'customer_voice'|'assistant_tts'|string
@@ -50,6 +59,12 @@ export interface WidgetChatResponse{
   transcript?:string
   voice?:{durationMs?:number;mimeType?:string}
   voiceReply?:WidgetAudio|null
+}
+export interface WidgetStartResponse{
+  success:boolean
+  conversationId:string
+  status:string
+  existing:boolean
 }
 export interface WidgetHistoryMessage{
   id:string
@@ -97,17 +112,23 @@ export async function loadWidgetConfig(key:string){
   const payload=await readJson<{success:boolean;widget:WidgetPublicConfig}>(response)
   return payload.widget
 }
-export async function sendWidgetMessage(key:string,input:{visitorId:string;conversationId:string;messageId:string;text:string;language:'ar'|'en';customer?:{name?:string;email?:string;phone?:string}}){
-  const response=await fetch(`${functionsBaseUrl}/widget-chat`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify(input)})
+export async function startWidgetConversation(key:string,input:{visitorId:string;conversationId:string;language:'ar'|'en';customer?:WidgetCustomerInput}){
+  const response=await fetch(`${functionsBaseUrl}/widget-chat`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify({...input,mode:'start'})})
+  return readJson<WidgetStartResponse>(response)
+}
+export async function sendWidgetMessage(key:string,input:{visitorId:string;conversationId:string;messageId:string;text:string;language:'ar'|'en';customer?:WidgetCustomerInput}){
+  const response=await fetch(`${functionsBaseUrl}/widget-chat`,{method:'POST',headers:{'content-type':'application/json','x-widget-key':key},body:JSON.stringify({...input,mode:'message'})})
   return readJson<WidgetChatResponse>(response)
 }
-export async function sendWidgetVoice(key:string,input:{visitorId:string;conversationId:string;messageId:string;audio:Blob;durationMs:number;language:'ar'|'en';customer?:{name?:string;email?:string;phone?:string}}){
+export async function sendWidgetVoice(key:string,input:{visitorId:string;conversationId:string;messageId:string;audio:Blob;durationMs:number;language:'ar'|'en';customer?:WidgetCustomerInput}){
   const form=new FormData()
   form.set('visitorId',input.visitorId)
   form.set('conversationId',input.conversationId)
   form.set('messageId',input.messageId)
   form.set('durationMs',String(Math.round(input.durationMs)))
   form.set('language',input.language)
+  if(input.customer?.firstName)form.set('customerFirstName',input.customer.firstName)
+  if(input.customer?.lastName)form.set('customerLastName',input.customer.lastName)
   if(input.customer?.name)form.set('customerName',input.customer.name)
   if(input.customer?.email)form.set('customerEmail',input.customer.email)
   if(input.customer?.phone)form.set('customerPhone',input.customer.phone)
