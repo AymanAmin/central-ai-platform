@@ -1,6 +1,16 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient } from '../_shared/runtime.ts'
 
+type JsonObject=Record<string,unknown>
+type IntakeKey='firstName'|'lastName'|'phone'|'email'|'question'
+const intakeKeys:IntakeKey[]=['firstName','lastName','phone','email','question']
+const defaultIntake=()=>Object.fromEntries(intakeKeys.map(key=>[key,{visible:true,required:false}]))
+const normalizeIntake=(value:unknown)=>{
+  const source=value&&typeof value==='object'&&!Array.isArray(value)?value as JsonObject:{}
+  const result=defaultIntake() as Record<IntakeKey,{visible:boolean;required:boolean}>
+  for(const key of intakeKeys){const raw=source[key];if(!raw||typeof raw!=='object'||Array.isArray(raw))continue;const row=raw as JsonObject;const visible=typeof row.visible==='boolean'?row.visible:true;result[key]={visible,required:visible&&row.required===true}}
+  return result
+}
 const headers={
   'content-type':'application/json; charset=utf-8',
   'access-control-allow-origin':'*',
@@ -26,7 +36,7 @@ Deno.serve(async(req:Request)=>{
       return send({success:true,items})
     }
     if(!key||!/^ai_widget_[A-Za-z0-9_-]{24,}$/.test(key))return send({success:false,error:'invalid_widget_key'},400)
-    const widget=await admin.from('web_chat_widgets').select('id,organization_id,prompt_profile_id,name,public_key,title_ar,title_en,welcome_ar,welcome_en,placeholder_ar,placeholder_en,suggestions_ar,suggestions_en,primary_color,position,public_test_enabled,is_active').eq('public_key',key).maybeSingle()
+    const widget=await admin.from('web_chat_widgets').select('id,organization_id,prompt_profile_id,name,public_key,title_ar,title_en,welcome_ar,welcome_en,placeholder_ar,placeholder_en,suggestions_ar,suggestions_en,primary_color,position,public_test_enabled,intake_fields,is_active').eq('public_key',key).maybeSingle()
     if(widget.error||!widget.data||!widget.data.is_active)return send({success:false,error:'widget_not_found'},404)
     const [organization,prompt,agent]=await Promise.all([
       admin.from('organizations').select('name_ar,name_en,default_language,is_active').eq('id',widget.data.organization_id).single(),
@@ -36,6 +46,6 @@ Deno.serve(async(req:Request)=>{
     if(organization.error||!organization.data?.is_active)return send({success:false,error:'organization_unavailable'},404)
     if(agent.error)throw agent.error
     const voiceReplyMode=agent.data?.voice_reply_mode==='always_voice'?'always_voice':agent.data?.voice_reply_mode==='voice_for_voice'?'voice_for_voice':'text_only'
-    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,agentName:prompt.data?.name??null,voiceEnabled:Boolean(agent.data?.voice_enabled),voiceReplyMode,maxVoiceSeconds:Number(agent.data?.max_voice_seconds??120),organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
+    return send({success:true,widget:{key:widget.data.public_key,name:widget.data.name,titleAr:widget.data.title_ar,titleEn:widget.data.title_en,welcomeAr:widget.data.welcome_ar,welcomeEn:widget.data.welcome_en,placeholderAr:widget.data.placeholder_ar,placeholderEn:widget.data.placeholder_en,suggestionsAr:widget.data.suggestions_ar,suggestionsEn:widget.data.suggestions_en,primaryColor:widget.data.primary_color,position:widget.data.position,publicTestEnabled:widget.data.public_test_enabled,intakeFields:normalizeIntake(widget.data.intake_fields),agentName:prompt.data?.name??null,voiceEnabled:Boolean(agent.data?.voice_enabled),voiceReplyMode,maxVoiceSeconds:Number(agent.data?.max_voice_seconds??120),organization:{nameAr:organization.data.name_ar,nameEn:organization.data.name_en,defaultLanguage:organization.data.default_language}}})
   }catch(error){return send({success:false,error:'widget_config_failed',detail:error instanceof Error?error.message:undefined},500)}
 })

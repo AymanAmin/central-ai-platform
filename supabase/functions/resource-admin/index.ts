@@ -1,12 +1,13 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createAdminClient, json, preflight } from '../_shared/runtime.ts'
+import { normalizeToolRequestSchema } from '../_shared/tool-schema.ts'
 
 type AppRole='SUPER_ADMIN'|'ORGANIZATION_ADMIN'|'KNOWLEDGE_MANAGER'|'SUPPORT_AGENT'|'VIEWER'
 type ConversationStatus='open'|'waiting_customer'|'waiting_human'|'human_assigned'|'closed'|'archived'
 type HandoffReason='customer_requested'|'low_confidence'|'complaint'|'payment_issue'|'sensitive_request'|'tool_failed'|'manual'|'policy'
 type Action='update_user'|'set_user_active'|'delete_user'|'update_api_client'|'delete_api_client'|'update_tool'|'set_tool_active'|'delete_tool'|'update_customer'|'delete_customer'|'set_conversation_status'|'request_handoff'|'take_conversation'|'resume_ai'|'claim_handoff'|'resolve_handoff'|'cancel_handoff'
 type ToolAuth='none'|'bearer'|'api_key'|'basic'
-interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:ToolAuth;toolSecret?:Record<string,unknown>;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:ConversationStatus;reason?:HandoffReason;notes?:string}
+interface Body{action?:Action;id?:string;organizationId?:string|null;fullName?:string;userRole?:AppRole;name?:string;rateLimitPerMinute?:number;endpointUrl?:string;method?:'GET'|'POST';authType?:ToolAuth;toolSecret?:Record<string,unknown>;requestSchema?:Record<string,unknown>;requiresVerification?:boolean;requiresHumanApproval?:boolean;timeoutSeconds?:number;isActive?:boolean;displayName?:string|null;phone?:string|null;email?:string|null;language?:string|null;status?:ConversationStatus;reason?:HandoffReason;notes?:string}
 const clean=(value:string|undefined,max=240)=>value?.trim().slice(0,max)??''
 const validToolSecret=(authType:ToolAuth,secret:Record<string,unknown>|undefined)=>{
   if(authType==='none')return true
@@ -66,7 +67,7 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(['update_tool','set_tool_active','delete_tool'].includes(body.action)){
-      const result=await admin.from('agent_tools').select('id,organization_id,name,code,is_active,method,endpoint_url,auth_type,requires_verification,requires_human_approval,timeout_seconds').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'tool_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN'])
+      const result=await admin.from('agent_tools').select('id,organization_id,name,code,is_active,method,endpoint_url,auth_type,request_schema,requires_verification,requires_human_approval,timeout_seconds').eq('id',body.id).single();if(result.error||!result.data)return json({success:false,error:'tool_not_found'},404);assertOrg(result.data.organization_id,['SUPER_ADMIN','ORGANIZATION_ADMIN'])
       if(body.action==='update_tool'){
         let endpoint:URL;try{endpoint=new URL(clean(body.endpointUrl,2048))}catch{return json({success:false,error:'invalid_tool_url'},400)}if(!['http:','https:'].includes(endpoint.protocol)||endpoint.username||endpoint.password)return json({success:false,error:'invalid_tool_url'},400)
         const previousAuth=(result.data.auth_type??'none') as ToolAuth;const nextAuth=body.authType??previousAuth
@@ -74,19 +75,21 @@ Deno.serve(async(req:Request)=>{
         const changingAuth=nextAuth!==previousAuth
         if(changingAuth&&nextAuth!=='none'&&!body.toolSecret)return json({success:false,error:'tool_credentials_required_for_auth_change'},400)
         if(body.toolSecret&&!validToolSecret(nextAuth,body.toolSecret))return json({success:false,error:'invalid_tool_credentials'},400)
-        const next={name:clean(body.name)||result.data.name,method:body.method??result.data.method,endpoint_url:endpoint.toString(),auth_type:nextAuth,requires_verification:body.requiresVerification??result.data.requires_verification,requires_human_approval:body.requiresHumanApproval??result.data.requires_human_approval,timeout_seconds:Math.min(30,Math.max(1,Math.round(body.timeoutSeconds??result.data.timeout_seconds)))}
+        let requestSchema
+        try{requestSchema=body.requestSchema===undefined?normalizeToolRequestSchema(result.data.request_schema):normalizeToolRequestSchema(body.requestSchema)}catch(error){return json({success:false,error:error instanceof Error?error.message:'invalid_tool_request_schema'},400)}
+        const next={name:clean(body.name)||result.data.name,method:body.method??result.data.method,endpoint_url:endpoint.toString(),auth_type:nextAuth,request_schema:requestSchema,requires_verification:body.requiresVerification??result.data.requires_verification,requires_human_approval:body.requiresHumanApproval??result.data.requires_human_approval,timeout_seconds:Math.min(30,Math.max(1,Math.round(body.timeoutSeconds??result.data.timeout_seconds)))}
         const update=await admin.from('agent_tools').update(next).eq('id',body.id);if(update.error)return json({success:false,error:'tool_update_failed',detail:update.error.message},400)
         if(body.toolSecret&&nextAuth!=='none'){
           const stored=await admin.rpc('set_agent_tool_secret',{p_tool_id:body.id,p_secret:body.toolSecret})
-          if(stored.error){await admin.from('agent_tools').update({name:result.data.name,method:result.data.method,endpoint_url:result.data.endpoint_url,auth_type:result.data.auth_type,requires_verification:result.data.requires_verification,requires_human_approval:result.data.requires_human_approval,timeout_seconds:result.data.timeout_seconds}).eq('id',body.id);return json({success:false,error:'tool_secret_store_failed',detail:stored.error.message},500)}
+          if(stored.error){await admin.from('agent_tools').update({name:result.data.name,method:result.data.method,endpoint_url:result.data.endpoint_url,auth_type:result.data.auth_type,request_schema:result.data.request_schema,requires_verification:result.data.requires_verification,requires_human_approval:result.data.requires_human_approval,timeout_seconds:result.data.timeout_seconds}).eq('id',body.id);return json({success:false,error:'tool_secret_store_failed',detail:stored.error.message},500)}
         }
-        await audit('Update Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code,authType:nextAuth,credentialsUpdated:Boolean(body.toolSecret)});return json({success:true})
+        await audit('Update Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code,authType:nextAuth,credentialsUpdated:Boolean(body.toolSecret),parameterCount:requestSchema.parameters.length});return json({success:true})
       }
       if(body.action==='set_tool_active'){
         if(typeof body.isActive!=='boolean')return json({success:false,error:'is_active_required'},400);const update=await admin.from('agent_tools').update({is_active:body.isActive}).eq('id',body.id);if(update.error)return json({success:false,error:'tool_status_failed',detail:update.error.message},400);await audit(body.isActive?'Enable Tool':'Disable Tool','agent_tool',body.id,result.data.organization_id);return json({success:true})
       }
       const executions=await admin.from('tool_executions').select('id',{count:'exact',head:true}).eq('tool_id',body.id);if((executions.count??0)>0)return json({success:false,error:'tool_has_execution_history',detail:'Disable the tool to preserve execution history.'},409)
-      await audit('Delete Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code});const deleted=await admin.from('agent_tools').delete().eq('id',body.id);if(deleted.error)return json({success:false,error:'tool_delete_failed',detail:deleted.error.message},400);return json({success:true})
+      await audit('Delete Tool','agent_tool',body.id,result.data.organization_id,{code:result.data.code});const deleted=await admin.from('agent_tools').delete().eq('id',body.id);if(deleted.error)return json({success:false,error:'api_client_delete_failed',detail:deleted.error.message},400);return json({success:true})
     }
 
     if(['update_customer','delete_customer'].includes(body.action)){

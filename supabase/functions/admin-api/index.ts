@@ -3,6 +3,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.112.3'
 import { getSupabaseSecretKey, json, preflight } from '../_shared/runtime.ts'
 import { createAiProvider } from '../_shared/ai.ts'
 import { globalProviderSettings, runtimeProvider } from '../_shared/agent-runtime.ts'
+import { normalizeToolRequestSchema } from '../_shared/tool-schema.ts'
 
 type AdminAction =
   | 'bootstrap_status' | 'bootstrap_super_admin' | 'create_organization' | 'create_api_client'
@@ -197,19 +198,7 @@ Deno.serve(async (req: Request) => {
         fallbackLatencyMs = Math.round(performance.now() - fallbackStarted)
       }
 
-      return json({
-        success: true,
-        chatProvider,
-        chatModel,
-        chatLatencyMs,
-        embeddingProvider,
-        embeddingModel,
-        embeddingLatencyMs,
-        fallbackProvider,
-        fallbackModel,
-        fallbackLatencyMs,
-        latencyMs: Math.round(performance.now() - started),
-      })
+      return json({ success: true, chatProvider, chatModel, chatLatencyMs, embeddingProvider, embeddingModel, embeddingLatencyMs, fallbackProvider, fallbackModel, fallbackLatencyMs, latencyMs: Math.round(performance.now() - started) })
     }
 
     if (body.action === 'invite_user') {
@@ -238,13 +227,15 @@ Deno.serve(async (req: Request) => {
       let parsed: URL
       try { parsed = new URL(t.endpointUrl) } catch { return json({ success: false, error: 'invalid_tool_url' }, 400) }
       if (!['http:', 'https:'].includes(parsed.protocol)) return json({ success: false, error: 'invalid_tool_protocol' }, 400)
+      let requestSchema
+      try { requestSchema = normalizeToolRequestSchema(t.requestSchema ?? {}) } catch (error) { return json({ success: false, error: error instanceof Error ? error.message : 'invalid_tool_request_schema' }, 400) }
       const { data: tool, error } = await admin.from('agent_tools').insert({
         organization_id: body.organizationId,
         name: t.name.trim(), code: normalizeCode(t.code), method: t.method, endpoint_url: parsed.toString(), auth_type: t.authType ?? 'none',
-        request_schema: t.requestSchema ?? {}, response_schema: t.responseSchema ?? {}, is_read_only: true,
+        request_schema: requestSchema, response_schema: t.responseSchema ?? {}, is_read_only: true,
         requires_verification: t.requiresVerification ?? false, requires_human_approval: t.requiresHumanApproval ?? false,
         timeout_seconds: Math.min(30, Math.max(1, t.timeoutSeconds ?? 10)), is_active: true,
-      }).select('id,organization_id,name,code,method,endpoint_url,auth_type,is_read_only,requires_verification,requires_human_approval,timeout_seconds,is_active,created_at').single()
+      }).select('id,organization_id,name,code,method,endpoint_url,auth_type,request_schema,is_read_only,requires_verification,requires_human_approval,timeout_seconds,is_active,created_at').single()
       if (error) return json({ success: false, error: 'tool_create_failed', detail: error.message }, 400)
       if ((t.authType ?? 'none') !== 'none' && body.toolSecret) {
         const stored = await admin.rpc('set_agent_tool_secret', { p_tool_id: tool.id, p_secret: body.toolSecret })
@@ -253,7 +244,7 @@ Deno.serve(async (req: Request) => {
           return json({ success: false, error: 'tool_secret_store_failed', detail: stored.error.message }, 500)
         }
       }
-      await admin.from('audit_logs').insert({ organization_id: body.organizationId, user_id: profile.id, action: 'Create Tool', entity_type: 'agent_tool', entity_id: tool.id, metadata: { code: tool.code, method: tool.method } })
+      await admin.from('audit_logs').insert({ organization_id: body.organizationId, user_id: profile.id, action: 'Create Tool', entity_type: 'agent_tool', entity_id: tool.id, metadata: { code: tool.code, method: tool.method, parameterCount: requestSchema.parameters.length } })
       return json({ success: true, tool }, 201)
     }
 

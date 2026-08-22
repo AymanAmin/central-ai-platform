@@ -1,6 +1,7 @@
 import { useEffect,useMemo,useRef,useState } from 'react'
 import { VoiceNotePlayer } from '../../components/VoiceNotePlayer'
-import { loadWidgetConfig,loadWidgetDirectory,sendWidgetMessage,sendWidgetVoice,syncWidgetConversation,widgetSession,type WidgetAudio,type WidgetDirectoryItem,type WidgetHistoryMessage,type WidgetPublicConfig,type WidgetSession } from './chatClient'
+import { customerDisplayName,customerIntakeKeys,normalizeCustomerIntakeFields,type CustomerIntakeFieldKey } from './intakeConfig'
+import { loadWidgetConfig,loadWidgetDirectory,sendWidgetMessage,sendWidgetVoice,startWidgetConversation,syncWidgetConversation,widgetSession,type WidgetAudio,type WidgetCustomerInput,type WidgetDirectoryItem,type WidgetHistoryMessage,type WidgetPublicConfig,type WidgetSession } from './chatClient'
 
 type Lang='ar'|'en'
 type ChatItem={id:string;role:'assistant'|'user';text:string;createdAt?:string;actions?:Array<Record<string,unknown>>;source?:string;agentName?:string|null;voiceInput?:boolean;audio?:WidgetAudio|null}
@@ -10,6 +11,15 @@ const label=(lang:Lang,ar:string,en:string)=>lang==='ar'?ar:en
 const fromHistory=(items:WidgetHistoryMessage[]):ChatItem[]=>items.map(item=>({id:item.id,role:item.role,text:item.text,createdAt:item.createdAt,actions:item.actions,source:item.source,agentName:item.agentName,voiceInput:item.voiceInput,audio:item.audio}))
 const clock=(ms:number)=>{const total=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`}
 const VOICE_REPLY_GRACE_MS=45_000
+const personalWelcome=(welcome:string,name:string,lang:Lang)=>{
+  const customer=name.trim();if(!customer)return welcome
+  if(lang==='ar'){
+    const rest=welcome.trim().replace(/^(?:مرحب(?:اً|ًا)|أهلاً|أهلًا|ياهلا|هلا)[،,\s]*/u,'').trim()
+    return `ياهلا ${customer}، ${rest||'كيف أقدر أساعدك؟'}`
+  }
+  const rest=welcome.trim().replace(/^(?:hello|hi|welcome)[,!\s]*/i,'').trim()
+  return `Hello ${customer}, ${rest||'how can I help you?'}`
+}
 
 export function PublicChat(){
   const [directory,setDirectory]=useState<WidgetDirectoryItem[]>([])
@@ -17,11 +27,15 @@ export function PublicChat(){
   const [config,setConfig]=useState<WidgetPublicConfig|null>(null)
   const [language,setLanguage]=useState<Lang>('ar')
   const [started,setStarted]=useState(false)
-  const [customerName,setCustomerName]=useState('')
+  const [firstName,setFirstName]=useState('')
+  const [lastName,setLastName]=useState('')
+  const [customerPhone,setCustomerPhone]=useState('')
   const [customerEmail,setCustomerEmail]=useState('')
+  const [initialQuestion,setInitialQuestion]=useState('')
   const [messages,setMessages]=useState<ChatItem[]>([])
   const [text,setText]=useState('')
   const [busy,setBusy]=useState(false)
+  const [starting,setStarting]=useState(false)
   const [error,setError]=useState('')
   const [humanTakeover,setHumanTakeover]=useState(false)
   const [session,setSession]=useState<WidgetSession|null>(null)
@@ -48,7 +62,14 @@ export function PublicChat(){
       const adopted=current.adopt(snapshot.conversationId)
       setSession({...current,conversationId:adopted,hasExistingConversation:true})
     }
-    if(snapshot.exists&&snapshot.messages.length){setMessages(fromHistory(snapshot.messages));return true}
+    if(snapshot.exists&&snapshot.messages.length){
+      const history=fromHistory(snapshot.messages)
+      setMessages(existing=>{
+        const welcomeItem=existing.find(item=>item.id==='welcome')
+        return welcomeItem?[welcomeItem,...history]:history
+      })
+      return true
+    }
     return false
   }
 
@@ -86,27 +107,39 @@ export function PublicChat(){
   const placeholder=config?(language==='ar'?config.placeholderAr:config.placeholderEn):''
   const suggestions=config?(language==='ar'?config.suggestionsAr:config.suggestionsEn):[]
   const voiceReplyMode=config?.voiceReplyMode??'text_only'
+  const intakeFields=normalizeCustomerIntakeFields(config?.intakeFields)
+  const displayName=customerDisplayName(firstName,lastName)
+  const customerInput:WidgetCustomerInput={firstName:firstName||undefined,lastName:lastName||undefined,name:displayName||undefined,email:customerEmail||undefined,phone:customerPhone||undefined}
+  const intakeValues:Record<CustomerIntakeFieldKey,string>={firstName,lastName,phone:customerPhone,email:customerEmail,question:initialQuestion}
+  const intakeReady=customerIntakeKeys.every(key=>!intakeFields[key].visible||!intakeFields[key].required||Boolean(intakeValues[key].trim()))
 
-  const choose=(key:string)=>{stopMedia();setError('');setConfig(null);setStarted(false);setMessages([]);setHumanTakeover(false);setSelectedKey(key)}
-  const start=async()=>{
-    if(!config)return
-    const current=session??widgetSession(config.key);setSession(current);setStarted(true);setError('')
-    try{const resumed=await sync(config,current);if(!resumed)setMessages([{id:'welcome',role:'assistant',text:welcome}])}
-    catch{setMessages([{id:'welcome',role:'assistant',text:welcome}])}
+  const choose=(key:string)=>{stopMedia();setError('');setConfig(null);setStarted(false);setMessages([]);setHumanTakeover(false);setSelectedKey(key);setFirstName('');setLastName('');setCustomerPhone('');setCustomerEmail('');setInitialQuestion('')}
+  const send=async(value?:string,forcedSession?:WidgetSession)=>{
+    if(!config||busy||recording)return
+    const message=(value??text).trim();if(!message)return
+    const current=forcedSession??session??widgetSession(config.key);if(!session)setSession(current)
+    setText('');setError('');setMessages(items=>[...items,{id:`pending-${crypto.randomUUID()}`,role:'user',text:message,createdAt:new Date().toISOString()}]);setBusy(true)
+    try{
+      const response=await sendWidgetMessage(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),text:message,language,customer:customerInput})
+      try{await sync(config,current)}catch{if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,createdAt:new Date().toISOString(),actions:response.actions,audio:response.voiceReply}])}
+    }catch(err){setError(err instanceof Error?err.message:label(language,'تعذر إرسال الرسالة.','Message could not be sent.'))}finally{setBusy(false)}
+  }
+  const start=async(event?:React.FormEvent)=>{
+    event?.preventDefault()
+    if(!config||starting||!intakeReady)return
+    const current=session??widgetSession(config.key);setSession(current);setStarting(true);setError('')
+    try{
+      await startWidgetConversation(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,language,customer:customerInput})
+      setMessages([{id:'welcome',role:'assistant',text:personalWelcome(welcome,firstName.trim()||displayName,language)}])
+      setStarted(true)
+      const question=intakeFields.question.visible?initialQuestion.trim():''
+      setInitialQuestion('')
+      if(question)await send(question,current)
+    }catch(err){setError(err instanceof Error?err.message:label(language,'تعذر بدء المحادثة.','Unable to start the chat.'))}finally{setStarting(false)}
   }
   const newChat=()=>{
     if(!config)return
-    stopMedia();const current=session??widgetSession(config.key);const conversationId=current.reset();setSession({...current,conversationId,hasExistingConversation:false});setMessages([{id:'welcome',role:'assistant',text:welcome}]);setHumanTakeover(false);setError('')
-  }
-  const send=async(value?:string)=>{
-    if(!config||busy||recording)return
-    const message=(value??text).trim();if(!message)return
-    const current=session??widgetSession(config.key);if(!session)setSession(current)
-    setText('');setError('');setMessages(items=>[...items,{id:`pending-${crypto.randomUUID()}`,role:'user',text:message,createdAt:new Date().toISOString()}]);setBusy(true)
-    try{
-      const response=await sendWidgetMessage(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),text:message,language,customer:{name:customerName||undefined,email:customerEmail||undefined}})
-      try{await sync(config,current)}catch{if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,createdAt:new Date().toISOString(),actions:response.actions,audio:response.voiceReply}])}
-    }catch(err){setError(err instanceof Error?err.message:label(language,'تعذر إرسال الرسالة.','Message could not be sent.'))}finally{setBusy(false)}
+    stopMedia();const current=session??widgetSession(config.key);const conversationId=current.reset();setSession({...current,conversationId,hasExistingConversation:false});setMessages([{id:'welcome',role:'assistant',text:personalWelcome(welcome,firstName.trim()||displayName,language)}]);setHumanTakeover(false);setError('')
   }
 
   const voiceError=(value:string)=>value.includes('voice_not_enabled')?label(language,'الرسائل الصوتية غير مفعّلة لهذه الجهة.','Voice messages are not enabled for this organization.')
@@ -121,7 +154,7 @@ export function PublicChat(){
     const pendingId=`voice-${crypto.randomUUID()}`
     setBusy(true);setError('');setMessages(items=>[...items,{id:pendingId,role:'user',voiceInput:true,text:label(language,'🎙 رسالة صوتية — جارٍ تحويلها إلى نص…','🎙 Voice message — transcribing…'),createdAt:new Date().toISOString()}])
     try{
-      const response=await sendWidgetVoice(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),audio,durationMs,language,customer:{name:customerName||undefined,email:customerEmail||undefined}})
+      const response=await sendWidgetVoice(config.key,{visitorId:current.visitorId,conversationId:current.conversationId,messageId:crypto.randomUUID(),audio,durationMs,language,customer:customerInput})
       try{await sync(config,current)}catch{
         if(response.transcript)setMessages(items=>items.map(item=>item.id===pendingId?{...item,text:response.transcript!,voiceInput:true}:item))
         if(response.answer)setMessages(items=>[...items,{id:`reply-${crypto.randomUUID()}`,role:'assistant',text:response.answer,createdAt:new Date().toISOString(),actions:response.actions,audio:response.voiceReply}])
@@ -164,6 +197,7 @@ export function PublicChat(){
     if(type==='call_phone'&&typeof item.phone==='string'){location.href=`tel:${item.phone}`;return}
     if((type==='reply_option'||type==='custom')&&actionLabel)void send(typeof item.value==='string'?item.value:actionLabel)
   }
+  const fieldTitle=(ar:string,en:string,key:CustomerIntakeFieldKey)=><>{label(language,ar,en)}{intakeFields[key].required?<span className="public-chat-required" aria-hidden="true">*</span>:<span className="public-chat-optional">{label(language,'اختياري','optional')}</span>}</>
 
   return <div className="public-chat-page" dir={language==='ar'?'rtl':'ltr'}>
     <div className="public-chat-atmosphere" aria-hidden="true"><span/><span/></div>
@@ -173,8 +207,16 @@ export function PublicChat(){
         <div className="public-chat-entry-copy"><span className="public-chat-eyebrow">{label(language,'قبل بدء المحادثة','Before you start')}</span><h1>{label(language,'اختر الجهة ثم ابدأ محادثة حقيقية','Choose the organization, then start a real conversation')}</h1><p>{label(language,'عند عودتك من نفس الجهاز سنعيد فتح نفس المحادثة وسجل الرسائل تلقائيًا.','When you return on the same device, your conversation and message history resume automatically.')}</p></div>
         {!hashWidget()&&<label className="public-chat-field"><span>{label(language,'الجهة','Organization')}</span><select value={selectedKey} onChange={event=>choose(event.target.value)}><option value="">{label(language,'اختر جهة…','Choose an organization…')}</option>{directory.map(item=><option value={item.key} key={item.key}>{language==='ar'?item.organization.nameAr:item.organization.nameEn||item.organization.nameAr}</option>)}</select></label>}
         {config&&<div className="public-chat-agent-card" style={{'--chat-accent':config.primaryColor} as React.CSSProperties}><span className="public-chat-agent-avatar">✦</span><div><strong>{title}</strong><small>{orgName}{config.agentName?` · ${config.agentName}`:''}{config.voiceEnabled?` · ${label(language,'صوت','Voice')}`:''}</small></div><span className="public-chat-live-dot">{label(language,'متصل','Online')}</span></div>}
-        <div className="public-chat-form-grid"><label className="public-chat-field"><span>{label(language,'الاسم (اختياري)','Name (optional)')}</span><input value={customerName} onChange={event=>setCustomerName(event.target.value)} placeholder={label(language,'مثال: محمد أحمد','e.g. Alex Smith')}/></label><label className="public-chat-field"><span>{label(language,'البريد (اختياري)','Email (optional)')}</span><input type="email" dir="ltr" value={customerEmail} onChange={event=>setCustomerEmail(event.target.value)} placeholder="name@example.com"/></label></div>
-        <div className="public-chat-entry-actions"><button disabled={!config} onClick={()=>void start()}>{label(language,'بدء المحادثة','Start chat')}</button><button className="public-chat-language" onClick={()=>setLanguage(current=>current==='ar'?'en':'ar')}>{language==='ar'?'English':'العربية'}</button></div>
+        <form onSubmit={start}>
+          {config&&<div className="public-chat-intake-grid">
+            {intakeFields.firstName.visible&&<label className="public-chat-field"><span>{fieldTitle('الاسم الأول','First name','firstName')}</span><input required={intakeFields.firstName.required} autoComplete="given-name" value={firstName} onChange={event=>setFirstName(event.target.value)} placeholder={label(language,'مثال: محمد','e.g. Alex')}/></label>}
+            {intakeFields.lastName.visible&&<label className="public-chat-field"><span>{fieldTitle('الاسم الأخير','Last name','lastName')}</span><input required={intakeFields.lastName.required} autoComplete="family-name" value={lastName} onChange={event=>setLastName(event.target.value)} placeholder={label(language,'مثال: أحمد','e.g. Smith')}/></label>}
+            {intakeFields.phone.visible&&<label className="public-chat-field"><span>{fieldTitle('رقم الجوال','Mobile number','phone')}</span><input required={intakeFields.phone.required} type="tel" inputMode="tel" autoComplete="tel" dir="ltr" value={customerPhone} onChange={event=>setCustomerPhone(event.target.value)} placeholder="05xxxxxxxx"/></label>}
+            {intakeFields.email.visible&&<label className="public-chat-field"><span>{fieldTitle('البريد الإلكتروني','Email','email')}</span><input required={intakeFields.email.required} type="email" autoComplete="email" dir="ltr" value={customerEmail} onChange={event=>setCustomerEmail(event.target.value)} placeholder="name@example.com"/></label>}
+            {intakeFields.question.visible&&<label className="public-chat-field public-chat-question"><span>{fieldTitle('السؤال','Question','question')}</span><textarea required={intakeFields.question.required} value={initialQuestion} onChange={event=>setInitialQuestion(event.target.value)} placeholder={label(language,'اكتب سؤالك لبدء المحادثة مباشرة…','Write your question to start the chat immediately…')}/></label>}
+          </div>}
+          <div className="public-chat-entry-actions"><button type="submit" disabled={!config||!intakeReady||starting}>{starting?label(language,'جارٍ البدء…','Starting…'):label(language,'بدء المحادثة','Start chat')}</button><button type="button" className="public-chat-language" onClick={()=>setLanguage(current=>current==='ar'?'en':'ar')}>{language==='ar'?'English':'العربية'}</button></div>
+        </form>
         {error&&<div className="public-chat-error" role="alert">{error}</div>}
       </section>
     </main>}
