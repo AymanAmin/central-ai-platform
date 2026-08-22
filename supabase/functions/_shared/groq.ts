@@ -1,4 +1,4 @@
-import type { AiChatResult, AiProvider, AiToolPlanResult, EmbeddingResult, EmbeddingTask } from './ai.ts'
+import type { AiAction, AiChatResult, AiProvider, AiToolPlanResult, EmbeddingResult, EmbeddingTask } from './ai.ts'
 
 interface GroqChatResponse {
   choices?: Array<{ message?: { content?: string | null } }>
@@ -9,17 +9,23 @@ interface GroqErrorResponse {
   error?: { message?: string; type?: string; code?: string | null }
 }
 
+type GroqAction = {
+  type: AiAction['type']
+  label: string | null
+  target: string | null
+  value: string | null
+}
+
+const actionTypes: AiAction['type'][] = ['open_url', 'reply_option', 'call_phone', 'download_file', 'human_handoff', 'request_location', 'open_screen', 'custom']
 const actionSchema = {
   type: 'object',
   properties: {
-    type: { type: 'string', enum: ['open_url', 'reply_option', 'call_phone', 'download_file', 'human_handoff', 'request_location', 'open_screen', 'custom'] },
+    type: { type: 'string', enum: actionTypes },
     label: { type: ['string', 'null'] },
-    url: { type: ['string', 'null'] },
-    phone: { type: ['string', 'null'] },
-    screen: { type: ['string', 'null'] },
+    target: { type: ['string', 'null'] },
     value: { type: ['string', 'null'] },
   },
-  required: ['type', 'label', 'url', 'phone', 'screen', 'value'],
+  required: ['type', 'label', 'target', 'value'],
   additionalProperties: false,
 }
 
@@ -29,6 +35,9 @@ const baseProperties = {
   requestHuman: { type: 'boolean' },
   actions: { type: 'array', items: actionSchema },
 }
+
+const actionContract = `For every action, return exactly these fields: type, label, target, value. Every field is required; use null when a field is unused. Put the URL in target for open_url/download_file, the phone number in target for call_phone, the screen identifier in target for open_screen, and the option/custom payload in value for reply_option/custom.`
+const schemaRepairInstruction = `Schema repair: obey every required JSON field exactly. ${actionContract}`
 
 function extractContent(payload: GroqChatResponse): string {
   const content = payload.choices?.[0]?.message?.content
@@ -50,6 +59,21 @@ export function normalizeGroqText(value: string) {
     .trim()
 }
 
+export function normalizeGroqActions(actions: GroqAction[] | undefined): AiAction[] {
+  return (actions ?? []).map(action => {
+    const target = action.target?.trim() || null
+    const value = action.value?.trim() || null
+    return {
+      type: action.type,
+      label: action.label?.trim() || null,
+      url: action.type === 'open_url' || action.type === 'download_file' ? (target ?? value) : null,
+      phone: action.type === 'call_phone' ? (target ?? value) : null,
+      screen: action.type === 'open_screen' ? (target ?? value) : null,
+      value: ['reply_option', 'custom'].includes(action.type) ? (value ?? target) : value,
+    }
+  })
+}
+
 function safeProviderDetail(value: unknown) {
   if (typeof value !== 'string') return ''
   return value.replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7E\u0600-\u06FF]/g, '').trim().slice(0, 280)
@@ -63,7 +87,10 @@ async function providerError(response: Response) {
   } catch {
     // Do not expose arbitrary upstream response bodies.
   }
-  return detail ? `chat_provider_error:${response.status}:${detail}` : `chat_provider_error:${response.status}`
+  return {
+    detail,
+    message: detail ? `chat_provider_error:${response.status}:${detail}` : `chat_provider_error:${response.status}`,
+  }
 }
 
 export class GroqProvider implements AiProvider {
@@ -82,34 +109,48 @@ export class GroqProvider implements AiProvider {
     input: string,
     maxOutputTokens: number,
   ): Promise<{ value: T; inputTokens: number; outputTokens: number }> {
-    const body: Record<string, unknown> = {
-      model: this.chatModel,
-      messages: [
-        { role: 'system', content: instructions },
+    const run = async (repair = false) => {
+      const messages = [
+        { role: 'system', content: schema ? `${instructions}\n\n${actionContract}` : instructions },
+        ...(repair ? [{ role: 'system', content: schemaRepairInstruction }] : []),
         { role: 'user', content: input },
-      ],
-      max_completion_tokens: maxOutputTokens,
-      temperature: 0.2,
-      reasoning_effort: 'low',
-    }
-    if (schema) {
-      body.response_format = {
-        type: 'json_schema',
-        json_schema: { name, strict: true, schema },
+      ]
+      const body: Record<string, unknown> = {
+        model: this.chatModel,
+        messages,
+        max_completion_tokens: maxOutputTokens,
+        temperature: repair ? 0 : 0.2,
+        reasoning_effort: 'low',
       }
+      if (schema) {
+        body.response_format = {
+          type: 'json_schema',
+          json_schema: { name, strict: true, schema },
+        }
+      }
+
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.key}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000),
+      })
+      return { response, body }
     }
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.key}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60_000),
-    })
-    if (!response.ok) throw new Error(await providerError(response))
-    const payload = await response.json() as GroqChatResponse
+    let attempt = await run(false)
+    if (!attempt.response.ok) {
+      const firstError = await providerError(attempt.response)
+      const schemaMismatch = Boolean(schema) && attempt.response.status === 400 && firstError.detail.includes('Generated JSON does not match the expected schema')
+      if (!schemaMismatch) throw new Error(firstError.message)
+      attempt = await run(true)
+      if (!attempt.response.ok) throw new Error((await providerError(attempt.response)).message)
+    }
+
+    const payload = await attempt.response.json() as GroqChatResponse
     const text = extractContent(payload)
     return {
       value: (schema ? JSON.parse(text) : text) as T,
@@ -125,14 +166,20 @@ export class GroqProvider implements AiProvider {
       required: ['answer', 'intent', 'requestHuman', 'actions'],
       additionalProperties: false,
     }
-    const result = await this.completion<Omit<AiChatResult, 'inputTokens' | 'outputTokens'>>(
+    const result = await this.completion<{ answer: string; intent: string; requestHuman: boolean; actions: GroqAction[] }>(
       schema,
       'central_ai_response',
       input.instructions,
       input.userInput,
       input.maxOutputTokens,
     )
-    return { ...result.value, answer: normalizeGroqText(result.value.answer), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+    return {
+      ...result.value,
+      answer: normalizeGroqText(result.value.answer),
+      actions: normalizeGroqActions(result.value.actions),
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    }
   }
 
   async chatWithTools(input: { instructions: string; userInput: string; maxOutputTokens: number }): Promise<AiToolPlanResult> {
@@ -146,14 +193,20 @@ export class GroqProvider implements AiProvider {
       required: ['answer', 'intent', 'requestHuman', 'actions', 'toolCode', 'toolInputJson'],
       additionalProperties: false,
     }
-    const result = await this.completion<Omit<AiToolPlanResult, 'inputTokens' | 'outputTokens'>>(
+    const result = await this.completion<{ answer: string; intent: string; requestHuman: boolean; actions: GroqAction[]; toolCode: string | null; toolInputJson: string | null }>(
       schema,
       'central_ai_tool_plan',
       input.instructions,
       input.userInput,
       input.maxOutputTokens,
     )
-    return { ...result.value, answer: normalizeGroqText(result.value.answer), inputTokens: result.inputTokens, outputTokens: result.outputTokens }
+    return {
+      ...result.value,
+      answer: normalizeGroqText(result.value.answer),
+      actions: normalizeGroqActions(result.value.actions),
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    }
   }
 
   async text(instructions: string, input: string, maxOutputTokens = 500): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
