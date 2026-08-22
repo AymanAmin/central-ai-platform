@@ -100,6 +100,7 @@ export async function createRuntimeProvider(
       if (secretResult.error) throw new Error('ai_provider_secret_lookup_failed')
       secret = typeof secretResult.data === 'string' && secretResult.data.trim() ? secretResult.data : null
     }
+    if (provider === 'groq' && !secret && !Deno.env.get('GROQ_API_KEY')?.trim()) throw new Error('ai_provider_not_configured')
     return {
       settings,
       ai: provider === 'azure_openai'
