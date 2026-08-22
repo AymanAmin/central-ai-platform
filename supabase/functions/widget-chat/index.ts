@@ -11,6 +11,7 @@ interface Body{
   language?:string
   customer?:{firstName?:string;lastName?:string;name?:string;email?:string;phone?:string}
 }
+interface ResolvedCustomer{id:string;displayName:string|null;phone:string|null;email:string|null;metadata:JsonObject}
 
 const clean=(value:string|undefined,max:number)=>value?.trim().slice(0,max)??''
 const originHeaders=(origin:string)=>({
@@ -54,18 +55,20 @@ Deno.serve(async(req:Request)=>{
     if(firstName)customerMetadata.firstName=firstName
     if(lastName)customerMetadata.lastName=lastName
 
-    const resolveCustomer=async()=>{
+    const resolveCustomer=async():Promise<ResolvedCustomer>=>{
       const existing=await admin.from('customers').select('id,display_name,phone,email,language,metadata').eq('organization_id',widget.organization_id).eq('external_customer_id',externalCustomerId).maybeSingle()
       if(existing.error)throw existing.error
       if(existing.data){
         const oldMetadata=isObject(existing.data.metadata)?existing.data.metadata:{}
-        const update=await admin.from('customers').update({display_name:displayName||existing.data.display_name,phone:phone||existing.data.phone,email:email||existing.data.email,language,last_seen_at:new Date().toISOString(),metadata:{...oldMetadata,...customerMetadata}}).eq('id',existing.data.id)
+        const nextMetadata={...oldMetadata,...customerMetadata}
+        const nextName=displayName||existing.data.display_name||null,nextPhone=phone||existing.data.phone||null,nextEmail=email||existing.data.email||null
+        const update=await admin.from('customers').update({display_name:nextName,phone:nextPhone,email:nextEmail,language,last_seen_at:new Date().toISOString(),metadata:nextMetadata}).eq('id',existing.data.id)
         if(update.error)throw update.error
-        return existing.data.id
+        return{id:existing.data.id,displayName:nextName,phone:nextPhone,email:nextEmail,metadata:nextMetadata}
       }
-      const created=await admin.from('customers').insert({organization_id:widget.organization_id,external_customer_id:externalCustomerId,display_name:displayName||null,phone:phone||null,email:email||null,language,metadata:customerMetadata}).select('id').single()
+      const created=await admin.from('customers').insert({organization_id:widget.organization_id,external_customer_id:externalCustomerId,display_name:displayName||null,phone:phone||null,email:email||null,language,metadata:customerMetadata}).select('id,display_name,phone,email,metadata').single()
       if(created.error||!created.data)throw created.error??new Error('customer_create_failed')
-      return created.data.id
+      return{id:created.data.id,displayName:created.data.display_name,phone:created.data.phone,email:created.data.email,metadata:isObject(created.data.metadata)?created.data.metadata:{}}
     }
     const resolveConversation=async(customerId:string)=>{
       const existing=await admin.from('conversations').select('id,status,human_takeover').eq('organization_id',widget.organization_id).eq('customer_id',customerId).eq('external_conversation_id',externalConversationId).maybeSingle()
@@ -89,14 +92,14 @@ Deno.serve(async(req:Request)=>{
       const rate=await admin.rpc('consume_api_rate_limit',{p_api_client_id:widget.api_client_id,p_limit:client.data.rate_limit_per_minute})
       if(rate.error)throw rate.error
       if(!rate.data)return send(origin,{success:false,error:'rate_limit_exceeded'},429)
-      const customerId=await resolveCustomer();const conversation=await resolveConversation(customerId)
+      const customer=await resolveCustomer();const conversation=await resolveConversation(customer.id)
       return send(origin,{success:true,conversationId,status:conversation.status,existing:conversation.existing})
     }
 
     const messageId=clean(body.messageId,160),text=clean(body.text,4000)
     if(!messageId||!text)return send(origin,{success:false,error:'invalid_request'},400)
-    const customerId=await resolveCustomer()
-    const existingConversation=await resolveConversation(customerId)
+    const resolvedCustomer=await resolveCustomer()
+    const existingConversation=await resolveConversation(resolvedCustomer.id)
     const externalMessageId=`web:${widget.id}:${messageId}`
     if(existingConversation.human_takeover){
       const now=new Date().toISOString()
@@ -111,7 +114,7 @@ Deno.serve(async(req:Request)=>{
 
     const secret=await admin.rpc('get_web_widget_api_key',{p_widget_id:widget.id})
     if(secret.error||typeof secret.data!=='string'||!secret.data.startsWith('ai_live_'))return send(origin,{success:false,error:'widget_backend_unavailable'},503)
-    const customer={externalId:externalCustomerId,name:displayName||undefined,email:email||null,phone:phone||undefined,language,metadata:customerMetadata}
+    const customer={externalId:externalCustomerId,name:resolvedCustomer.displayName||undefined,email:resolvedCustomer.email,phone:resolvedCustomer.phone||undefined,language,metadata:resolvedCustomer.metadata}
     const context:JsonObject={widgetId:widget.id,sourceOrigin:origin,webWidget:true}
     if(widget.prompt_profile_id)context.promptProfileId=widget.prompt_profile_id
     if(widget.knowledge_base_id)context.knowledgeBaseId=widget.knowledge_base_id
