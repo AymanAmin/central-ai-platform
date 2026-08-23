@@ -2,7 +2,16 @@ import { useEffect,useMemo,useState } from 'react'
 import { Badge,Card,Empty,PageHeader } from '../../components/Ui'
 import { useI18n } from '../../lib/i18n'
 import { supabase } from '../../lib/supabase'
-import { codeLabel,codeLanguages,integrationEndpoint,integrationSnippet,scalarValue,type CodeLanguage } from './integrationSnippets'
+import {
+  codeLabel,
+  codeLanguages,
+  integrationEndpoint,
+  integrationSnippet,
+  scalarValue,
+  voiceIntegrationEndpoint,
+  voiceIntegrationSnippet,
+  type CodeLanguage,
+} from './integrationSnippets'
 
 type VariableRow={id:string;key:string;value:string}
 type ApiClientOption={id:string;name:string;code:string;api_key_prefix:string;organization_id:string;is_active:boolean;capabilities:string[]|null}
@@ -39,7 +48,9 @@ export function IntegrationGuide(){
   const [messageText,setMessageText]=useState(language==='ar'?'كم الرسوم؟':'What are the fees?')
   const [variables,setVariables]=useState<VariableRow[]>([{id:crypto.randomUUID(),key:'source',value:'integration-guide'}])
   const [codeLanguage,setCodeLanguage]=useState<CodeLanguage>('curl')
+  const [voiceCodeLanguage,setVoiceCodeLanguage]=useState<CodeLanguage>('curl')
   const [copied,setCopied]=useState(false)
+  const [voiceCopied,setVoiceCopied]=useState(false)
   const [busy,setBusy]=useState(false)
   const [result,setResult]=useState<TestEnvelope|null>(null)
   const [error,setError]=useState('')
@@ -74,6 +85,31 @@ export function IntegrationGuide(){
     context,
   }),[channel,customerId,customerName,customerPhone,customerEmail,requestLanguage,conversationId,messageId,messageText,context])
   const generated=useMemo(()=>integrationSnippet(codeLanguage,payload),[codeLanguage,payload])
+  const generatedVoice=useMemo(()=>voiceIntegrationSnippet(voiceCodeLanguage,{
+    channel:channel.trim()||'voice',
+    customerExternalId:customerId.trim(),
+    customerName:customerName.trim()||undefined,
+    customerPhone:customerPhone.trim()||undefined,
+    customerEmail:customerEmail.trim()||undefined,
+    conversationExternalId:conversationId.trim(),
+    messageExternalId:messageId.trim(),
+    language:requestLanguage,
+    durationMs:12000,
+    context,
+  }),[voiceCodeLanguage,channel,customerId,customerName,customerPhone,customerEmail,conversationId,messageId,requestLanguage,context])
+  const voiceResponseExample=useMemo(()=>({
+    success:true,
+    conversationId:'CONV-001',
+    status:'completed',
+    answer:language==='ar'?'يمكنك التقديم من خلال بوابة القبول.':'You can apply through the admission portal.',
+    transcript:language==='ar'?'السلام عليكم، كيف أقدم؟':'Hello, how do I apply?',
+    intent:'admission',
+    confidence:0.91,
+    usage:{inputTokens:820,outputTokens:65,estimatedCost:0.00012},
+    voice:{durationMs:12000,mimeType:'audio/mp4'},
+    voiceStored:true,
+    voiceReply:{url:'https://signed-url.example/audio.wav',mimeType:'audio/wav',durationMs:5300},
+  }),[language])
   const responseRows=useMemo(()=>{
     if(!result||result.response==null)return [] as Array<[string,string]>
     if(typeof result.response!=='object'||Array.isArray(result.response))return [['response',String(result.response)]]
@@ -85,6 +121,7 @@ export function IntegrationGuide(){
   const updateVariable=(rowId:string,field:'key'|'value',value:string)=>setVariables(rows=>rows.map(row=>row.id===rowId?{...row,[field]:value}:row))
   const removeVariable=(rowId:string)=>setVariables(rows=>rows.filter(row=>row.id!==rowId))
   const copy=async()=>{await navigator.clipboard.writeText(generated);setCopied(true);window.setTimeout(()=>setCopied(false),1600)}
+  const copyVoice=async()=>{await navigator.clipboard.writeText(generatedVoice);setVoiceCopied(true);window.setTimeout(()=>setVoiceCopied(false),1600)}
   const run=async()=>{
     setError('');setResult(null)
     if(!selectedClientId){setError(tr('اختر عميل API قبل تشغيل الاختبار.','Choose an API client before running the test.'));return}
@@ -100,22 +137,33 @@ export function IntegrationGuide(){
   }
 
   return <div className="integration-guide">
-    <PageHeader title={tr('دليل الربط واختبار API','Integration Guide & API Tester')} description={tr('عدّل الطلب، أضف متغيرات context، نفّذ معاينة آمنة داخل المنصة، ثم انسخ مثال الربط باللغة التي يستخدمها فريقك.','Edit the request, add context variables, run a safe in-platform preview, then copy an integration example in your team’s language.')}/>
+    <PageHeader title={tr('دليل الربط واختبار API','Integration Guide & API Tester')} description={tr('استخدم نفس عميل API للنص والصوت، تعرّف على طريقة احتساب الاستهلاك، جرّب الطلب النصي بأمان، ثم انسخ مثال الربط المناسب لفريقك.','Use the same API client for text and voice, understand how usage is counted, safely preview a text request, then copy the integration example your team needs.')}/>
 
     <div className="integration-summary">
-      <Card><span>01</span><strong>{tr('كوّن الطلب','Build request')}</strong><small>{tr('عدّل العميل والمحادثة والرسالة والمتغيرات.','Edit customer, conversation, message, and variables.')}</small></Card>
-      <Card><span>02</span><strong>{tr('اختبر دون كشف المفتاح','Preview without exposing keys')}</strong><small>{tr('اختر عميل API؛ لا تحتاج إلى نسخ المفتاح السري داخل الشاشة.','Select an API client; no secret key needs to be pasted into the screen.')}</small></Card>
-      <Card><span>03</span><strong>{tr('انسخ اللغة المناسبة','Copy your language')}</strong><small>{tr('cURL وJavaScript وPython وPHP وC#.','cURL, JavaScript, Python, PHP, and C#.')}</small></Card>
+      <Card><span>01</span><strong>{tr('كوّن الطلب','Build request')}</strong><small>{tr('حدّد العميل والمحادثة والرسالة وcontext.','Set customer, conversation, message, and context.')}</small></Card>
+      <Card><span>02</span><strong>{tr('اختر نصًا أو صوتًا','Choose text or voice')}</strong><small>{tr('استخدم /chat للنص و/voice-message للصوت.','Use /chat for text and /voice-message for audio.')}</small></Card>
+      <Card><span>03</span><strong>{tr('راقب الاستهلاك','Track usage')}</strong><small>{tr('تُسجّل العمليات والتوكنات والتكلفة لكل جهة وعميل API.','Operations, tokens, and cost are logged per organization and API client.')}</small></Card>
     </div>
+
+    <Card className="integration-result-card">
+      <div className="integration-section-head"><div><span>{tr('الاستهلاك والتكلفة','Usage & cost')}</span><h2>{tr('متى يتم احتساب الاستهلاك؟','When is usage counted?')}</h2><p>{tr('الربط الخارجي يستخدم نفس مسار المعالجة الفعلي للمنصة؛ لذلك تُسجّل كل عملية AI في usage_logs وتظهر ضمن تقارير الاستهلاك والتكلفة.','External API calls use the platform’s real processing path, so every AI operation is written to usage_logs and appears in usage and cost reports.')}</p></div><Badge>usage_logs</Badge></div>
+      <div className="integration-result-metrics">
+        <div><span>{tr('رسالة نصية عادية','Normal text')}</span><strong>Embedding + Chat</strong></div>
+        <div><span>{tr('رسالة صوتية','Voice message')}</span><strong>Transcription + Chat</strong></div>
+        <div><span>{tr('رد صوتي مفعّل','Voice reply enabled')}</span><strong>+ TTS</strong></div>
+      </div>
+      <div className="notice">{tr('لا يتم استدعاء Chat AI للتحيات السريعة أو FAQ المباشر. كما أن إعادة نفس messageExternalId تعيد النتيجة السابقة بدل استدعاء AI مرة أخرى؛ وفي الصوت لا تتم إعادة التفريغ الصوتي للرسالة المكررة.','Chat AI is not called for greeting fast-path or direct FAQ answers. Reusing the same messageExternalId returns the existing result instead of calling AI again; duplicate voice messages are not transcribed again.')}</div>
+      <details className="integration-json-preview"><summary>{tr('ما الذي يُحسب في الرسالة الصوتية؟','What is counted for a voice message?')}</summary><pre dir="ltr">{`voice_transcription  -> speech to text\nembedding            -> knowledge search query\nchat                 -> AI answer\nvoice_tts            -> only when a voice reply is generated`}</pre></details>
+    </Card>
 
     <div className="integration-workbench">
       <Card className="integration-builder">
-        <div className="integration-section-head"><div><span>{tr('طلب تجريبي','Test request')}</span><h2>{tr('متغيرات الإرسال','Request variables')}</h2><p>{tr('المعاينة تستخدم إعدادات الذكاء والمعرفة الفعلية للجهة بدون إنشاء محادثة إنتاجية أو الحاجة للمفتاح الكامل.','The preview uses the organization’s real AI and knowledge settings without creating a production conversation or requiring the full API key.')}</p></div><Badge>{requestLanguage.toUpperCase()}</Badge></div>
-        <div className="integration-endpoint"><span>{tr('نقطة الاتصال الفعلية','Production endpoint')}</span><code>{integrationEndpoint}</code></div>
+        <div className="integration-section-head"><div><span>{tr('طلب نصي تجريبي','Text test request')}</span><h2>{tr('متغيرات الإرسال','Request variables')}</h2><p>{tr('المعاينة تستخدم إعدادات الذكاء والمعرفة الفعلية للجهة بدون إنشاء محادثة إنتاجية أو الحاجة للمفتاح الكامل.','The preview uses the organization’s real AI and knowledge settings without creating a production conversation or requiring the full API key.')}</p></div><Badge>{requestLanguage.toUpperCase()}</Badge></div>
+        <div className="integration-endpoint"><span>{tr('نقطة اتصال النص','Text endpoint')}</span><code>{integrationEndpoint}</code></div>
 
         <div className="integration-form-grid">
           <label className="span-2"><span>{tr('عميل API المستخدم في المعاينة','API client used for preview')}</span><select value={selectedClientId} disabled={clientsLoading||clients.length===0} onChange={e=>{setSelectedClientId(e.target.value);setResult(null);setError('')}}><option value="">{clientsLoading?tr('جارٍ تحميل العملاء…','Loading API clients…'):tr('اختر عميل API…','Choose an API client…')}</option>{clients.map(client=><option key={client.id} value={client.id}>{client.name} · {client.code} · {client.api_key_prefix}…</option>)}</select><small>{tr('يتم التحقق من صلاحياتك والجهة على الخادم. المفتاح السري لا يُسترجع ولا يُعرض ولا يُدوّر.','Your role and organization are verified on the server. The secret key is never retrieved, shown, or rotated.')}</small></label>
-          {selectedClient&&<div className="span-2 notice">{tr(`المعاينة مرتبطة بـ ${selectedClient.name}. أمثلة الكود أدناه تستخدم مفتاحًا وهميًا لأن النظام الحقيقي يتطلب مفتاح ai_live_ الكامل.`,`Previewing as ${selectedClient.name}. The code samples below keep a placeholder because production calls require the full ai_live_ key.`)}</div>}
+          {selectedClient&&<div className="span-2 notice">{tr(`المعاينة مرتبطة بـ ${selectedClient.name}. أمثلة الكود أدناه تستخدم مفتاحًا وهميًا لأن الاستدعاء الحقيقي يتطلب مفتاح ai_live_ الكامل.`,`Previewing as ${selectedClient.name}. The code samples below use a placeholder because real calls require the full ai_live_ key.`)}</div>}
           <label><span>{tr('القناة','Channel')}</span><input value={channel} onChange={e=>setChannel(e.target.value)} placeholder="whatsapp"/></label>
           <label><span>{tr('لغة العميل','Customer language')}</span><select value={requestLanguage} onChange={e=>setRequestLanguage(e.target.value as 'ar'|'en')}><option value="ar">العربية — ar</option><option value="en">English — en</option></select></label>
           <label><span>{tr('معرّف العميل','Customer externalId')}</span><input dir="ltr" value={customerId} onChange={e=>setCustomerId(e.target.value)}/></label>
@@ -137,7 +185,7 @@ export function IntegrationGuide(){
       </Card>
 
       <Card className="integration-code-card">
-        <div className="integration-section-head"><div><span>{tr('كود جاهز','Ready-to-use code')}</span><h2>{tr('شكل الإرسال','Request example')}</h2><p>{tr('هذه أمثلة الإنتاج الفعلية. استبدل المفتاح الوهمي بالمفتاح الكامل في بيئتك الآمنة.','These are real production examples. Replace the placeholder with the full key in your secure environment.')}</p></div></div>
+        <div className="integration-section-head"><div><span>{tr('كود النص','Text code')}</span><h2>{tr('مثال /chat','/chat example')}</h2><p>{tr('هذه أمثلة إنتاج فعلية. استبدل المفتاح الوهمي بالمفتاح الكامل داخل خادمك أو بيئة أسرارك، وليس داخل JavaScript عام في المتصفح.','These are real production examples. Replace the placeholder with the full key in your server or secret environment, not public browser JavaScript.')}</p></div></div>
         <div className="integration-code-tabs" role="tablist">{codeLanguages.map(item=><button type="button" role="tab" aria-selected={codeLanguage===item} className={codeLanguage===item?'active':''} onClick={()=>setCodeLanguage(item)} key={item}>{codeLabel[item]}</button>)}</div>
         <div className="integration-code-block"><div><span>{codeLabel[codeLanguage]}</span><button type="button" onClick={()=>void copy()}>{copied?tr('تم النسخ','Copied'):tr('نسخ','Copy')}</button></div><pre dir="ltr"><code>{generated}</code></pre></div>
         <details className="integration-json-preview"><summary>{tr('عرض JSON النهائي','View final JSON')}</summary><pre dir="ltr">{safeJson(payload)}</pre></details>
@@ -152,5 +200,36 @@ export function IntegrationGuide(){
         <details className="integration-json-preview" open><summary>{tr('الاستجابة الخام JSON','Raw JSON response')}</summary><pre dir="ltr">{safeJson(result.response)}</pre></details>
       </>}
     </Card>
+
+    <div className="integration-workbench">
+      <Card className="integration-builder">
+        <div className="integration-section-head"><div><span>{tr('الرسائل الصوتية','Voice messages')}</span><h2>{tr('إرسال مقطع صوتي عبر API','Send an audio clip through the API')}</h2><p>{tr('أرسل الملف إلى voice-message بصيغة multipart/form-data. المنصة تفرّغ الصوت إلى نص ثم تمرر النص تلقائيًا إلى نفس محرك المحادثة والذاكرة وRAG.','Send the file to voice-message as multipart/form-data. The platform transcribes the audio, then automatically passes the transcript through the same chat, memory, and RAG pipeline.')}</p></div><Badge>multipart/form-data</Badge></div>
+        <div className="integration-endpoint"><span>{tr('نقطة اتصال الصوت','Voice endpoint')}</span><code>{voiceIntegrationEndpoint}</code></div>
+        <div className="integration-result-metrics">
+          <div><span>{tr('أقصى حجم للملف','Maximum file size')}</span><strong>8 MB</strong></div>
+          <div><span>{tr('المدة الافتراضية القصوى','Default max duration')}</span><strong>120 sec</strong></div>
+          <div><span>{tr('الصيغ المدعومة','Supported formats')}</span><strong>WebM · OGG · WAV · MP3 · AAC · FLAC · M4A</strong></div>
+        </div>
+        <div className="integration-result-table-wrap"><table className="data-table integration-result-table"><thead><tr><th>{tr('الحقل','Field')}</th><th>{tr('طريقة الاستخدام','How to use it')}</th></tr></thead><tbody>
+          <tr><td><code>audio</code></td><td>{tr('ملف الصوت نفسه. حقل multipart إلزامي.','The audio file itself. Required multipart field.')}</td></tr>
+          <tr><td><code>durationMs</code></td><td>{tr('مدة المقطع بالمللي ثانية، مثال 12000 لمقطع 12 ثانية.','Clip duration in milliseconds; for example, 12000 for 12 seconds.')}</td></tr>
+          <tr><td><code>customerExternalId</code></td><td>{tr('المعرّف الثابت للعميل في نظامك.','Stable customer identifier in your system.')}</td></tr>
+          <tr><td><code>conversationExternalId</code></td><td>{tr('استخدم نفس القيمة للرسائل التابعة لنفس المحادثة حتى تستمر الذاكرة.','Reuse the same value for messages in the same conversation so memory continues.')}</td></tr>
+          <tr><td><code>messageExternalId</code></td><td>{tr('معرّف فريد لكل رسالة. إعادة نفس القيمة تمنع احتساب الرسالة ومعالجتها مرة أخرى.','Unique per message. Reusing it prevents the message from being processed and charged again.')}</td></tr>
+          <tr><td><code>channel</code></td><td>{tr('مثل whatsapp أو website أو mobile.','For example whatsapp, website, or mobile.')}</td></tr>
+          <tr><td><code>language</code></td><td>{tr('اختياري كإشارة للتفريغ: ar أو en.','Optional transcription hint: ar or en.')}</td></tr>
+          <tr><td><code>contextJson</code></td><td>{tr('JSON نصي لإرسال verifiedCustomer أو أي سياق إضافي.','JSON string for verifiedCustomer or any additional context.')}</td></tr>
+        </tbody></table></div>
+        <div className="notice">{tr('لا ترسل History كامل. يكفي أن تحافظ على conversationExternalId؛ المنصة تسترجع الملخص والرسائل الأخيرة بنفسها. استخدم نفس مفتاح ai_live_ الذي يملك صلاحية chat.','Do not send the full history. Keep the same conversationExternalId and the platform retrieves summaries and recent messages itself. Use the same ai_live_ key with chat capability.')}</div>
+        <details className="integration-json-preview"><summary>{tr('أوضاع الرد الصوتي','Voice reply modes')}</summary><pre dir="ltr">{`text_only       -> voice input is understood, response stays text\nvoice_for_voice -> voice input receives a generated voice reply\nalways_voice     -> eligible replies are generated as voice`}</pre></details>
+        <details className="integration-json-preview"><summary>{tr('مثال استجابة رسالة صوتية','Example voice response')}</summary><pre dir="ltr">{safeJson(voiceResponseExample)}</pre></details>
+      </Card>
+
+      <Card className="integration-code-card">
+        <div className="integration-section-head"><div><span>{tr('كود الصوت','Voice code')}</span><h2>{tr('مثال /voice-message','/voice-message example')}</h2><p>{tr('المثال يستخدم voice.m4a بمدة 12 ثانية ويأخذ معرفات العميل والمحادثة الحالية من النموذج أعلاه. غيّر الملف والمدة قبل الاستخدام الفعلي.','The example uses a 12-second voice.m4a file and reuses the customer and conversation identifiers above. Replace the file and duration for production use.')}</p></div></div>
+        <div className="integration-code-tabs" role="tablist">{codeLanguages.map(item=><button type="button" role="tab" aria-selected={voiceCodeLanguage===item} className={voiceCodeLanguage===item?'active':''} onClick={()=>setVoiceCodeLanguage(item)} key={item}>{codeLabel[item]}</button>)}</div>
+        <div className="integration-code-block"><div><span>{codeLabel[voiceCodeLanguage]}</span><button type="button" onClick={()=>void copyVoice()}>{voiceCopied?tr('تم النسخ','Copied'):tr('نسخ','Copy')}</button></div><pre dir="ltr"><code>{generatedVoice}</code></pre></div>
+      </Card>
+    </div>
   </div>
 }
