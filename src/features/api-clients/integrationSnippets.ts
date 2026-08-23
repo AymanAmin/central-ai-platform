@@ -115,17 +115,20 @@ export function voiceIntegrationSnippet(language:CodeLanguage,input:VoiceSnippet
   ].filter((item):item is readonly [string,string]=>item!==null)
 
   if(language==='curl'){
-    const optional=optionalFields.map(([key,value])=>` \\\n  -F '${key}=${shellSingleQuote(value)}'`).join('')
-    return `curl -X POST '${voiceIntegrationEndpoint}' \\
-  -H 'Authorization: Bearer ai_live_YOUR_API_KEY' \\
-  -F 'audio=@voice.m4a;type=audio/mp4' \\
-  -F 'durationMs=${durationMs}' \\
-  -F 'channel=${shellSingleQuote(channel)}' \\
-  -F 'customerExternalId=${shellSingleQuote(customerId)}' \\
-  -F 'conversationExternalId=${shellSingleQuote(conversationId)}' \\
-  -F 'messageExternalId=${shellSingleQuote(messageId)}' \\
-  -F 'language=${input.language}'${optional} \\
-  -F 'contextJson=${shellSingleQuote(contextJson)}'`
+    const lines=[
+      `curl -X POST '${voiceIntegrationEndpoint}'`,
+      `-H 'Authorization: Bearer ai_live_YOUR_API_KEY'`,
+      `-F 'audio=@voice.m4a;type=audio/mp4'`,
+      `-F 'durationMs=${durationMs}'`,
+      `-F 'channel=${shellSingleQuote(channel)}'`,
+      `-F 'customerExternalId=${shellSingleQuote(customerId)}'`,
+      `-F 'conversationExternalId=${shellSingleQuote(conversationId)}'`,
+      `-F 'messageExternalId=${shellSingleQuote(messageId)}'`,
+      `-F 'language=${input.language}'`,
+      ...optionalFields.map(([key,value])=>`-F '${key}=${shellSingleQuote(value)}'`),
+      `-F 'contextJson=${shellSingleQuote(contextJson)}'`,
+    ]
+    return lines.join(` ${String.fromCharCode(92)}\n  `)
   }
 
   if(language==='javascript'){
