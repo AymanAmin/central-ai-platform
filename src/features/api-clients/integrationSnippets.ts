@@ -108,11 +108,10 @@ export function voiceIntegrationSnippet(language:CodeLanguage,input:VoiceSnippet
   const messageId=cleanVoiceValue(input.messageExternalId)
   const durationMs=Number.isFinite(input.durationMs)&&input.durationMs>0?Math.round(input.durationMs):12000
   const contextJson=JSON.stringify(input.context)
-  const optionalFields=[
-    customerName?['customerName',customerName] as const:null,
-    customerPhone?['customerPhone',customerPhone] as const:null,
-    customerEmail?['customerEmail',customerEmail] as const:null,
-  ].filter((item):item is readonly [string,string]=>item!==null)
+  const optionalFields:Array<readonly [string,string]>=[]
+  if(customerName)optionalFields.push(['customerName',customerName])
+  if(customerPhone)optionalFields.push(['customerPhone',customerPhone])
+  if(customerEmail)optionalFields.push(['customerEmail',customerEmail])
 
   if(language==='curl'){
     const lines=[
